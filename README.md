@@ -1,5 +1,8 @@
 # SessionVault
 
+<img width="1342" height="883" alt="image" src="https://github.com/user-attachments/assets/3956d698-2ca8-4ec3-8434-1c6704b96ac7" />
+
+
 A Python SSH client GUI with integrated KeePass credential management — combining the productivity of MobaXterm-style session management with secure KeePass vault access.
 
 ## Features
