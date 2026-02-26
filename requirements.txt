@@ -1,0 +1,17 @@
+# SessionVault - SSH Client with KeePass Integration
+# Python 3.11+ required
+#
+# Install all dependencies:
+#   pip install -r requirements.txt
+
+# SSH client library
+paramiko>=3.4.0
+
+# KeePass (.kdbx) database support
+pykeepass>=4.0.6
+
+# Cryptography backend (required by paramiko and pykeepass)
+cryptography>=42.0.0
+
+# Optional: faster SSH key parsing
+bcrypt>=4.1.0
