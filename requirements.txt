@@ -1,20 +1,28 @@
-# SessionVault - SSH Client with KeePass Integration
+# SessionVault v2.0 – SSH / RDP / VNC / Telnet client with KeePass integration
 # Python 3.11+ required
 #
-# Install all dependencies:
+# Install:
 #   pip install -r requirements.txt
 
-# GUI toolkit
+# ── GUI toolkit ──────────────────────────────────────────────────────────────
 PySide6>=6.6.0
 
-# SSH client library
+# ── SSH client ───────────────────────────────────────────────────────────────
 paramiko>=3.4.0
 
-# KeePass (.kdbx) database support
+# ── KeePass (.kdbx) r/w support (KDBX3 AES-256 and KDBX4 ChaCha20/Argon2) ──
 pykeepass>=4.0.6
 
-# Cryptography backend (required by paramiko and pykeepass)
+# ── Cryptography backend (paramiko + pykeepass, ChaCha20/Argon2 for KDBX4) ──
 cryptography>=42.0.0
 
-# Optional: faster SSH key parsing
+# ── SSH key parsing acceleration (optional but recommended) ──────────────────
 bcrypt>=4.1.0
+
+# ── Global auto-type: cross-platform keystroke simulation ────────────────────
+# Linux: also install  python3-xlib  (sudo apt install python3-xlib)
+# macOS: grant Accessibility permission in System Settings → Privacy
+pynput>=1.7.6
+
+# ── Standalone packaging (optional – uncomment to build executables) ──────────
+# pyinstaller>=6.3.0
