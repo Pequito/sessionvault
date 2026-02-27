@@ -1,18 +1,27 @@
 """Application Settings dialog.
 
 Covers:
-  • Appearance – theme picker + custom application icon
+  • Appearance  – theme picker + custom application icon
   • Terminal    – font size
   • Auto-Type   – keystroke delay
-  • Plugins     – loaded plugin list
+  • KeePass     – clipboard auto-clear timeout
+  • Plugins     – loaded plugin list + reload
+
+The dialog has three buttons:
+  OK     – save all settings and close
+  Apply  – save all settings immediately without closing
+  Cancel – discard and close
 """
 
 from __future__ import annotations
+
+import pathlib
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -32,16 +41,19 @@ from PySide6.QtWidgets import (
 
 from app.constants import THEMES
 from app.managers.settings import settings_manager
+from app.managers.logger import get_logger
 from app.plugins.loader import plugin_loader
+
+log = get_logger(__name__)
 
 
 class SettingsDialog(QDialog):
-    """Application-wide settings."""
+    """Application-wide settings with OK / Apply / Cancel."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(520, 420)
+        self.setMinimumSize(520, 460)
         self._build_ui()
         self._load()
 
@@ -57,19 +69,25 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.setObjectName("settings-tabs")
         tabs.addTab(self._tab_appearance(), "Appearance")
-        tabs.addTab(self._tab_terminal(), "Terminal")
-        tabs.addTab(self._tab_autotype(), "Auto-Type")
-        tabs.addTab(self._tab_plugins(), "Plugins")
+        tabs.addTab(self._tab_terminal(),   "Terminal")
+        tabs.addTab(self._tab_autotype(),   "Auto-Type")
+        tabs.addTab(self._tab_keepass(),    "KeePass")
+        tabs.addTab(self._tab_browser(),    "Browser")
+        tabs.addTab(self._tab_plugins(),    "Plugins")
         root.addWidget(tabs)
 
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
-        btns.accepted.connect(self._apply)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
+        # ── Button row: OK | Apply | Cancel ───────────────────────────
+        self._btns = QDialogButtonBox()
+        ok_btn     = self._btns.addButton(QDialogButtonBox.StandardButton.Ok)
+        apply_btn  = self._btns.addButton(QDialogButtonBox.StandardButton.Apply)
+        _cancel    = self._btns.addButton(QDialogButtonBox.StandardButton.Cancel)
+
+        ok_btn.setObjectName("primary")
+        apply_btn.setObjectName("apply")
+
+        self._btns.clicked.connect(self._on_button_clicked)
+        self._btns.rejected.connect(self.reject)
+        root.addWidget(self._btns)
 
     # ── Appearance tab ─────────────────────────────────────────────────
 
@@ -96,7 +114,7 @@ class SettingsDialog(QDialog):
         icon_row.addWidget(clear_btn)
         form.addRow("Application icon (.png/.ico)", icon_row)
 
-        note = QLabel("Theme changes take effect immediately on OK.")
+        note = QLabel("Theme changes take effect immediately on Apply / OK.")
         note.setWordWrap(True)
         form.addRow("", note)
         return w
@@ -143,6 +161,111 @@ class SettingsDialog(QDialog):
         form.addRow("", info)
         return w
 
+    # ── KeePass tab ────────────────────────────────────────────────────
+
+    def _tab_keepass(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setSpacing(12)
+        form.setContentsMargins(16, 16, 16, 16)
+
+        self._clip_timeout_spin = QSpinBox()
+        self._clip_timeout_spin.setRange(0, 120)
+        self._clip_timeout_spin.setSuffix("  s")
+        self._clip_timeout_spin.setSpecialValueText("Disabled (0)")
+        form.addRow("Clipboard auto-clear", self._clip_timeout_spin)
+
+        shortcuts_info = QLabel(
+            "In the KeePass panel:\n"
+            "  Ctrl+U  – copy username of selected entry\n"
+            "  Ctrl+P  – copy password of selected entry\n\n"
+            "After copying, the clipboard is automatically cleared after the\n"
+            "timeout above.  Set to 0 to disable auto-clear."
+        )
+        shortcuts_info.setWordWrap(True)
+        form.addRow("", shortcuts_info)
+        return w
+
+    # ── Browser tab ────────────────────────────────────────────────────
+
+    def _tab_browser(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # ── Enable toggle ──────────────────────────────────────────────
+        self._browser_chk = QCheckBox(
+            "Enable browser integration  (starts local HTTP server on save)"
+        )
+        layout.addWidget(self._browser_chk)
+
+        # ── Port ──────────────────────────────────────────────────────
+        form = QFormLayout()
+        form.setSpacing(10)
+        self._browser_port_spin = QSpinBox()
+        self._browser_port_spin.setRange(1024, 65535)
+        self._browser_port_spin.setValue(19456)
+        form.addRow("Server port", self._browser_port_spin)
+        layout.addLayout(form)
+
+        # ── Status ────────────────────────────────────────────────────
+        self._browser_status_lbl = QLabel()
+        self._browser_status_lbl.setWordWrap(True)
+        layout.addWidget(self._browser_status_lbl)
+        self._refresh_browser_status()
+
+        # ── Extension location ────────────────────────────────────────
+        ext_box = QGroupBox("Browser extension")
+        ext_layout = QVBoxLayout(ext_box)
+        ext_layout.setSpacing(6)
+
+        import app.browser  # noqa: PLC0415
+        ext_dir = pathlib.Path(app.browser.__file__).parent / "extension"
+        ext_path_lbl = QLabel(f"Extension folder:  {ext_dir}")
+        ext_path_lbl.setWordWrap(True)
+        ext_layout.addWidget(ext_path_lbl)
+
+        open_dir_btn = QPushButton("Open extension folder…")
+        open_dir_btn.clicked.connect(lambda: self._open_ext_folder(ext_dir))
+        ext_layout.addWidget(open_dir_btn)
+
+        install_info = QLabel(
+            "Chrome / Edge:  chrome://extensions  →  Load unpacked  →  select the folder above.\n"
+            "Firefox:  about:debugging  →  Load Temporary Add-on  →  select manifest.json.\n\n"
+            "Convert icons/icon.svg to PNG before loading "
+            "(see icons/README.txt)."
+        )
+        install_info.setWordWrap(True)
+        ext_layout.addWidget(install_info)
+        layout.addWidget(ext_box)
+
+        layout.addStretch()
+        return w
+
+    def _refresh_browser_status(self) -> None:
+        from app.browser.server import browser_server  # noqa: PLC0415
+        if browser_server.running:
+            self._browser_status_lbl.setText(
+                f"  ● Server running on 127.0.0.1:{browser_server.port}"
+            )
+            self._browser_status_lbl.setStyleSheet("color: #a6e3a1;")
+        else:
+            self._browser_status_lbl.setText("  ○ Server not running")
+            self._browser_status_lbl.setStyleSheet("color: #f38ba8;")
+
+    def _open_ext_folder(self, path: pathlib.Path) -> None:
+        import subprocess, sys  # noqa: PLC0415
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            log.error("Could not open extension folder: %s", exc)
+
     # ── Plugins tab ────────────────────────────────────────────────────
 
     def _tab_plugins(self) -> QWidget:
@@ -151,7 +274,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel(f"Plugin directory: ~/.sessionvault/plugins/"))
+        layout.addWidget(QLabel("Plugin directory: ~/.sessionvault/plugins/"))
 
         self._plugin_list = QListWidget()
         layout.addWidget(self._plugin_list, 1)
@@ -175,29 +298,68 @@ class SettingsDialog(QDialog):
         self._icon_edit.setText(settings_manager.get("app_icon", ""))
         self._font_spin.setValue(settings_manager.get("font_size_terminal", 11))
         self._delay_spin.setValue(settings_manager.get("autotype_delay_ms", 50))
+        self._clip_timeout_spin.setValue(
+            settings_manager.get("clipboard_clear_timeout_s", 15)
+        )
+        self._browser_chk.setChecked(settings_manager.get("browser_integration", False))
+        self._browser_port_spin.setValue(settings_manager.get("browser_port", 19456))
 
-    def _apply(self) -> None:
-        theme_name = self._theme_combo.currentText()
-        icon_path = self._icon_edit.text().strip()
-        font_size = self._font_spin.value()
-        delay = self._delay_spin.value()
+    def _save_settings(self) -> None:
+        """Persist current UI values to settings_manager and apply immediately."""
+        theme_name   = self._theme_combo.currentText()
+        icon_path    = self._icon_edit.text().strip()
+        font_size    = self._font_spin.value()
+        delay        = self._delay_spin.value()
+        clip_timeout = self._clip_timeout_spin.value()
+        browser_on   = self._browser_chk.isChecked()
+        browser_port = self._browser_port_spin.value()
 
-        settings_manager.set("theme", theme_name)
-        settings_manager.set("app_icon", icon_path)
-        settings_manager.set("font_size_terminal", font_size)
-        settings_manager.set("autotype_delay_ms", delay)
+        settings_manager.set("theme",                     theme_name)
+        settings_manager.set("app_icon",                  icon_path)
+        settings_manager.set("font_size_terminal",        font_size)
+        settings_manager.set("autotype_delay_ms",         delay)
+        settings_manager.set("clipboard_clear_timeout_s", clip_timeout)
+        settings_manager.set("browser_integration",       browser_on)
+        settings_manager.set("browser_port",              browser_port)
 
-        # Apply theme immediately
-        from app.theme import apply_theme
+        from app.theme import apply_theme  # noqa: PLC0415
         apply_theme(theme_name)
 
-        # Apply icon immediately
         if icon_path:
             app = QApplication.instance()
             if app:
                 app.setWindowIcon(QIcon(icon_path))
 
-        self.accept()
+        # Start / stop / restart browser server to match new settings
+        from app.browser.server import browser_server  # noqa: PLC0415
+        if browser_on:
+            if browser_server.running and browser_server.port != browser_port:
+                browser_server.restart(browser_port)
+                log.info("Browser server restarted on port %d", browser_port)
+            elif not browser_server.running:
+                try:
+                    browser_server.start(browser_port)
+                except OSError as exc:
+                    log.error("Could not start browser server: %s", exc)
+        else:
+            browser_server.stop()
+
+        self._refresh_browser_status()
+
+        log.info(
+            "Settings saved: theme=%s  font=%dpt  autotype_delay=%dms  "
+            "clip_timeout=%ds  browser=%s:%d",
+            theme_name, font_size, delay, clip_timeout, browser_on, browser_port,
+        )
+
+    def _on_button_clicked(self, btn) -> None:
+        role = self._btns.buttonRole(btn)
+        if role == QDialogButtonBox.ButtonRole.AcceptRole:   # OK
+            self._save_settings()
+            self.accept()
+        elif role == QDialogButtonBox.ButtonRole.ApplyRole:  # Apply
+            self._save_settings()
+        # Cancel is handled by the rejected signal → self.reject()
 
     # ------------------------------------------------------------------
     # Helpers
