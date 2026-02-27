@@ -12,11 +12,14 @@ class SettingsManager:
     """Load/save application-wide preferences."""
 
     _DEFAULTS: dict[str, Any] = {
-        "theme":               "Catppuccin Mocha",
-        "app_icon":            "",
-        "font_size_terminal":  11,
-        "autotype_delay_ms":   50,
-        "plugins_enabled":     True,
+        "theme":                      "Catppuccin Mocha",
+        "app_icon":                   "",
+        "font_size_terminal":         11,
+        "autotype_delay_ms":          50,
+        "plugins_enabled":            True,
+        "clipboard_clear_timeout_s":  15,
+        "browser_integration":        False,
+        "browser_port":               19456,
     }
 
     def __init__(self) -> None:

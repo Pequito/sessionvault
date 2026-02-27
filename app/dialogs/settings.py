@@ -15,15 +15,19 @@ The dialog has three buttons:
 
 from __future__ import annotations
 
+import pathlib
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -68,6 +72,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._tab_terminal(),   "Terminal")
         tabs.addTab(self._tab_autotype(),   "Auto-Type")
         tabs.addTab(self._tab_keepass(),    "KeePass")
+        tabs.addTab(self._tab_browser(),    "Browser")
         tabs.addTab(self._tab_plugins(),    "Plugins")
         root.addWidget(tabs)
 
@@ -181,6 +186,86 @@ class SettingsDialog(QDialog):
         form.addRow("", shortcuts_info)
         return w
 
+    # ── Browser tab ────────────────────────────────────────────────────
+
+    def _tab_browser(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # ── Enable toggle ──────────────────────────────────────────────
+        self._browser_chk = QCheckBox(
+            "Enable browser integration  (starts local HTTP server on save)"
+        )
+        layout.addWidget(self._browser_chk)
+
+        # ── Port ──────────────────────────────────────────────────────
+        form = QFormLayout()
+        form.setSpacing(10)
+        self._browser_port_spin = QSpinBox()
+        self._browser_port_spin.setRange(1024, 65535)
+        self._browser_port_spin.setValue(19456)
+        form.addRow("Server port", self._browser_port_spin)
+        layout.addLayout(form)
+
+        # ── Status ────────────────────────────────────────────────────
+        self._browser_status_lbl = QLabel()
+        self._browser_status_lbl.setWordWrap(True)
+        layout.addWidget(self._browser_status_lbl)
+        self._refresh_browser_status()
+
+        # ── Extension location ────────────────────────────────────────
+        ext_box = QGroupBox("Browser extension")
+        ext_layout = QVBoxLayout(ext_box)
+        ext_layout.setSpacing(6)
+
+        import app.browser  # noqa: PLC0415
+        ext_dir = pathlib.Path(app.browser.__file__).parent / "extension"
+        ext_path_lbl = QLabel(f"Extension folder:  {ext_dir}")
+        ext_path_lbl.setWordWrap(True)
+        ext_layout.addWidget(ext_path_lbl)
+
+        open_dir_btn = QPushButton("Open extension folder…")
+        open_dir_btn.clicked.connect(lambda: self._open_ext_folder(ext_dir))
+        ext_layout.addWidget(open_dir_btn)
+
+        install_info = QLabel(
+            "Chrome / Edge:  chrome://extensions  →  Load unpacked  →  select the folder above.\n"
+            "Firefox:  about:debugging  →  Load Temporary Add-on  →  select manifest.json.\n\n"
+            "Convert icons/icon.svg to PNG before loading "
+            "(see icons/README.txt)."
+        )
+        install_info.setWordWrap(True)
+        ext_layout.addWidget(install_info)
+        layout.addWidget(ext_box)
+
+        layout.addStretch()
+        return w
+
+    def _refresh_browser_status(self) -> None:
+        from app.browser.server import browser_server  # noqa: PLC0415
+        if browser_server.running:
+            self._browser_status_lbl.setText(
+                f"  ● Server running on 127.0.0.1:{browser_server.port}"
+            )
+            self._browser_status_lbl.setStyleSheet("color: #a6e3a1;")
+        else:
+            self._browser_status_lbl.setText("  ○ Server not running")
+            self._browser_status_lbl.setStyleSheet("color: #f38ba8;")
+
+    def _open_ext_folder(self, path: pathlib.Path) -> None:
+        import subprocess, sys  # noqa: PLC0415
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            log.error("Could not open extension folder: %s", exc)
+
     # ── Plugins tab ────────────────────────────────────────────────────
 
     def _tab_plugins(self) -> QWidget:
@@ -216,20 +301,26 @@ class SettingsDialog(QDialog):
         self._clip_timeout_spin.setValue(
             settings_manager.get("clipboard_clear_timeout_s", 15)
         )
+        self._browser_chk.setChecked(settings_manager.get("browser_integration", False))
+        self._browser_port_spin.setValue(settings_manager.get("browser_port", 19456))
 
     def _save_settings(self) -> None:
         """Persist current UI values to settings_manager and apply immediately."""
-        theme_name  = self._theme_combo.currentText()
-        icon_path   = self._icon_edit.text().strip()
-        font_size   = self._font_spin.value()
-        delay       = self._delay_spin.value()
+        theme_name   = self._theme_combo.currentText()
+        icon_path    = self._icon_edit.text().strip()
+        font_size    = self._font_spin.value()
+        delay        = self._delay_spin.value()
         clip_timeout = self._clip_timeout_spin.value()
+        browser_on   = self._browser_chk.isChecked()
+        browser_port = self._browser_port_spin.value()
 
-        settings_manager.set("theme",                    theme_name)
-        settings_manager.set("app_icon",                 icon_path)
-        settings_manager.set("font_size_terminal",       font_size)
-        settings_manager.set("autotype_delay_ms",        delay)
+        settings_manager.set("theme",                     theme_name)
+        settings_manager.set("app_icon",                  icon_path)
+        settings_manager.set("font_size_terminal",        font_size)
+        settings_manager.set("autotype_delay_ms",         delay)
         settings_manager.set("clipboard_clear_timeout_s", clip_timeout)
+        settings_manager.set("browser_integration",       browser_on)
+        settings_manager.set("browser_port",              browser_port)
 
         from app.theme import apply_theme  # noqa: PLC0415
         apply_theme(theme_name)
@@ -239,10 +330,26 @@ class SettingsDialog(QDialog):
             if app:
                 app.setWindowIcon(QIcon(icon_path))
 
+        # Start / stop / restart browser server to match new settings
+        from app.browser.server import browser_server  # noqa: PLC0415
+        if browser_on:
+            if browser_server.running and browser_server.port != browser_port:
+                browser_server.restart(browser_port)
+                log.info("Browser server restarted on port %d", browser_port)
+            elif not browser_server.running:
+                try:
+                    browser_server.start(browser_port)
+                except OSError as exc:
+                    log.error("Could not start browser server: %s", exc)
+        else:
+            browser_server.stop()
+
+        self._refresh_browser_status()
+
         log.info(
             "Settings saved: theme=%s  font=%dpt  autotype_delay=%dms  "
-            "clip_timeout=%ds",
-            theme_name, font_size, delay, clip_timeout,
+            "clip_timeout=%ds  browser=%s:%d",
+            theme_name, font_size, delay, clip_timeout, browser_on, browser_port,
         )
 
     def _on_button_clicked(self, btn) -> None:

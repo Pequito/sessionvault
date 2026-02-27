@@ -196,6 +196,34 @@ class KeePassManager:
                 pass
             return None
 
+    def find_entries_for_url(self, url: str) -> list:
+        """Return entries whose stored URL hostname matches *url*'s hostname.
+
+        Matching is case-insensitive and also catches entries whose stored URL
+        is a suffix of the requested hostname (e.g. a stored URL of
+        ``example.com`` will match ``login.example.com``).
+        """
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        req_host = (urlparse(url).hostname or "").lower()
+        if not req_host:
+            return []
+
+        with self._lock:
+            db = self._active_db()
+            if db is None:
+                return []
+            matches = []
+            for entry in db.entries:
+                entry_host = (urlparse(entry.url or "").hostname or "").lower()
+                if entry_host and (
+                    entry_host == req_host
+                    or req_host.endswith("." + entry_host)
+                    or entry_host.endswith("." + req_host)
+                ):
+                    matches.append(entry)
+            return matches
+
     def get_password_for_session(self, session: "SSHSessionConfig") -> Optional[str]:
         """Return the KeePass password linked to *session*, or None.
 
