@@ -1,10 +1,16 @@
 """Application Settings dialog.
 
 Covers:
-  • Appearance – theme picker + custom application icon
+  • Appearance  – theme picker + custom application icon
   • Terminal    – font size
   • Auto-Type   – keystroke delay
-  • Plugins     – loaded plugin list
+  • KeePass     – clipboard auto-clear timeout
+  • Plugins     – loaded plugin list + reload
+
+The dialog has three buttons:
+  OK     – save all settings and close
+  Apply  – save all settings immediately without closing
+  Cancel – discard and close
 """
 
 from __future__ import annotations
@@ -18,7 +24,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,16 +37,19 @@ from PySide6.QtWidgets import (
 
 from app.constants import THEMES
 from app.managers.settings import settings_manager
+from app.managers.logger import get_logger
 from app.plugins.loader import plugin_loader
+
+log = get_logger(__name__)
 
 
 class SettingsDialog(QDialog):
-    """Application-wide settings."""
+    """Application-wide settings with OK / Apply / Cancel."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(520, 420)
+        self.setMinimumSize(520, 460)
         self._build_ui()
         self._load()
 
@@ -57,19 +65,24 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.setObjectName("settings-tabs")
         tabs.addTab(self._tab_appearance(), "Appearance")
-        tabs.addTab(self._tab_terminal(), "Terminal")
-        tabs.addTab(self._tab_autotype(), "Auto-Type")
-        tabs.addTab(self._tab_plugins(), "Plugins")
+        tabs.addTab(self._tab_terminal(),   "Terminal")
+        tabs.addTab(self._tab_autotype(),   "Auto-Type")
+        tabs.addTab(self._tab_keepass(),    "KeePass")
+        tabs.addTab(self._tab_plugins(),    "Plugins")
         root.addWidget(tabs)
 
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
-        btns.accepted.connect(self._apply)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
+        # ── Button row: OK | Apply | Cancel ───────────────────────────
+        self._btns = QDialogButtonBox()
+        ok_btn     = self._btns.addButton(QDialogButtonBox.StandardButton.Ok)
+        apply_btn  = self._btns.addButton(QDialogButtonBox.StandardButton.Apply)
+        _cancel    = self._btns.addButton(QDialogButtonBox.StandardButton.Cancel)
+
+        ok_btn.setObjectName("primary")
+        apply_btn.setObjectName("apply")
+
+        self._btns.clicked.connect(self._on_button_clicked)
+        self._btns.rejected.connect(self.reject)
+        root.addWidget(self._btns)
 
     # ── Appearance tab ─────────────────────────────────────────────────
 
@@ -96,7 +109,7 @@ class SettingsDialog(QDialog):
         icon_row.addWidget(clear_btn)
         form.addRow("Application icon (.png/.ico)", icon_row)
 
-        note = QLabel("Theme changes take effect immediately on OK.")
+        note = QLabel("Theme changes take effect immediately on Apply / OK.")
         note.setWordWrap(True)
         form.addRow("", note)
         return w
@@ -143,6 +156,31 @@ class SettingsDialog(QDialog):
         form.addRow("", info)
         return w
 
+    # ── KeePass tab ────────────────────────────────────────────────────
+
+    def _tab_keepass(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setSpacing(12)
+        form.setContentsMargins(16, 16, 16, 16)
+
+        self._clip_timeout_spin = QSpinBox()
+        self._clip_timeout_spin.setRange(0, 120)
+        self._clip_timeout_spin.setSuffix("  s")
+        self._clip_timeout_spin.setSpecialValueText("Disabled (0)")
+        form.addRow("Clipboard auto-clear", self._clip_timeout_spin)
+
+        shortcuts_info = QLabel(
+            "In the KeePass panel:\n"
+            "  Ctrl+U  – copy username of selected entry\n"
+            "  Ctrl+P  – copy password of selected entry\n\n"
+            "After copying, the clipboard is automatically cleared after the\n"
+            "timeout above.  Set to 0 to disable auto-clear."
+        )
+        shortcuts_info.setWordWrap(True)
+        form.addRow("", shortcuts_info)
+        return w
+
     # ── Plugins tab ────────────────────────────────────────────────────
 
     def _tab_plugins(self) -> QWidget:
@@ -151,7 +189,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel(f"Plugin directory: ~/.sessionvault/plugins/"))
+        layout.addWidget(QLabel("Plugin directory: ~/.sessionvault/plugins/"))
 
         self._plugin_list = QListWidget()
         layout.addWidget(self._plugin_list, 1)
@@ -175,29 +213,46 @@ class SettingsDialog(QDialog):
         self._icon_edit.setText(settings_manager.get("app_icon", ""))
         self._font_spin.setValue(settings_manager.get("font_size_terminal", 11))
         self._delay_spin.setValue(settings_manager.get("autotype_delay_ms", 50))
+        self._clip_timeout_spin.setValue(
+            settings_manager.get("clipboard_clear_timeout_s", 15)
+        )
 
-    def _apply(self) -> None:
-        theme_name = self._theme_combo.currentText()
-        icon_path = self._icon_edit.text().strip()
-        font_size = self._font_spin.value()
-        delay = self._delay_spin.value()
+    def _save_settings(self) -> None:
+        """Persist current UI values to settings_manager and apply immediately."""
+        theme_name  = self._theme_combo.currentText()
+        icon_path   = self._icon_edit.text().strip()
+        font_size   = self._font_spin.value()
+        delay       = self._delay_spin.value()
+        clip_timeout = self._clip_timeout_spin.value()
 
-        settings_manager.set("theme", theme_name)
-        settings_manager.set("app_icon", icon_path)
-        settings_manager.set("font_size_terminal", font_size)
-        settings_manager.set("autotype_delay_ms", delay)
+        settings_manager.set("theme",                    theme_name)
+        settings_manager.set("app_icon",                 icon_path)
+        settings_manager.set("font_size_terminal",       font_size)
+        settings_manager.set("autotype_delay_ms",        delay)
+        settings_manager.set("clipboard_clear_timeout_s", clip_timeout)
 
-        # Apply theme immediately
-        from app.theme import apply_theme
+        from app.theme import apply_theme  # noqa: PLC0415
         apply_theme(theme_name)
 
-        # Apply icon immediately
         if icon_path:
             app = QApplication.instance()
             if app:
                 app.setWindowIcon(QIcon(icon_path))
 
-        self.accept()
+        log.info(
+            "Settings saved: theme=%s  font=%dpt  autotype_delay=%dms  "
+            "clip_timeout=%ds",
+            theme_name, font_size, delay, clip_timeout,
+        )
+
+    def _on_button_clicked(self, btn) -> None:
+        role = self._btns.buttonRole(btn)
+        if role == QDialogButtonBox.ButtonRole.AcceptRole:   # OK
+            self._save_settings()
+            self.accept()
+        elif role == QDialogButtonBox.ButtonRole.ApplyRole:  # Apply
+            self._save_settings()
+        # Cancel is handled by the rejected signal → self.reject()
 
     # ------------------------------------------------------------------
     # Helpers

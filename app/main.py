@@ -35,10 +35,13 @@ from app.models import SSHSessionConfig
 from app.managers.keepass import keepass_manager, PYKEEPASS_AVAILABLE
 from app.managers.session import SessionManager
 from app.managers.settings import settings_manager
+from app.managers.logger import get_logger
 from app.importers.mobaxterm import MobaXtermImporter
 from app.terminal.widget import SSHTerminalWidget
 from app.theme import apply_theme, stylesheet
 from app.plugins.loader import plugin_loader
+
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +63,10 @@ class SessionVaultApp(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._refresh_session_tree()
-        self._refresh_kp_panel()
+        self._kp_panel.refresh()
         self._apply_saved_settings()
         self._load_plugins()
+        log.info("%s %s started", APP_NAME, APP_VERSION)
 
     # ------------------------------------------------------------------
     # Startup
@@ -80,7 +84,7 @@ class SessionVaultApp(QMainWindow):
             loaded = plugin_loader.load_all()
             if loaded:
                 self._status(f"Plugins loaded: {', '.join(loaded)}")
-            # Rebuild plugins menu (populated after load_all)
+                log.info("Plugins loaded: %s", ", ".join(loaded))
             self._rebuild_plugin_menu()
 
     # ------------------------------------------------------------------
@@ -119,6 +123,7 @@ class SessionVaultApp(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # ── App title ─────────────────────────────────────────────────
         title = QLabel(APP_NAME)
         title.setStyleSheet(
             f"background-color: {C['crust']}; color: {C['mauve']};"
@@ -126,6 +131,7 @@ class SessionVaultApp(QMainWindow):
         )
         layout.addWidget(title)
 
+        # ── Sessions header ───────────────────────────────────────────
         sess_hdr = QFrame()
         sess_hdr.setStyleSheet(f"background-color: {C['surface0']};")
         sh = QHBoxLayout(sess_hdr)
@@ -148,6 +154,7 @@ class SessionVaultApp(QMainWindow):
         sh.addWidget(add_btn)
         layout.addWidget(sess_hdr)
 
+        # ── Session tree ──────────────────────────────────────────────
         self._sess_tree = QTreeWidget()
         self._sess_tree.setHeaderHidden(True)
         self._sess_tree.setRootIsDecorated(True)
@@ -157,6 +164,7 @@ class SessionVaultApp(QMainWindow):
         self._sess_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         layout.addWidget(self._sess_tree, 3)
 
+        # ── KeePass header ────────────────────────────────────────────
         kp_hdr = QFrame()
         kp_hdr.setStyleSheet(f"background-color: {C['surface0']};")
         kh = QHBoxLayout(kp_hdr)
@@ -169,11 +177,12 @@ class SessionVaultApp(QMainWindow):
         kh.addWidget(kh_lbl)
         layout.addWidget(kp_hdr)
 
-        from PySide6.QtWidgets import QListWidget
-        self._kp_list = QListWidget()
-        self._kp_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._kp_list.customContextMenuRequested.connect(self._on_kp_context_menu)
-        layout.addWidget(self._kp_list, 2)
+        # ── KeePass hierarchical panel ────────────────────────────────
+        from app.keepass.panel import KeePassPanel  # noqa: PLC0415
+        self._kp_panel = KeePassPanel(sidebar)
+        self._kp_panel.open_db_requested.connect(self._open_keepass)
+        self._kp_panel.autofill_requested.connect(self._autofill_terminal)
+        layout.addWidget(self._kp_panel, 2)
 
         return sidebar
 
@@ -215,13 +224,14 @@ class SessionVaultApp(QMainWindow):
         act_open_kp.triggered.connect(self._open_keepass)
         act_new_kp = tools_m.addAction("&New KeePass Database…")
         act_new_kp.triggered.connect(self._new_keepass)
-        act_lock_kp = tools_m.addAction("&Lock KeePass Database")
-        act_lock_kp.triggered.connect(self._lock_keepass)
+        tools_m.addSeparator()
+        act_lock_kp = tools_m.addAction("Lock &Active Database")
+        act_lock_kp.triggered.connect(self._lock_active_keepass)
+        act_lock_all = tools_m.addAction("Lock &All Databases")
+        act_lock_all.triggered.connect(self._lock_all_keepass)
         tools_m.addSeparator()
         act_new_entry = tools_m.addAction("Add KeePass &Entry…")
         act_new_entry.triggered.connect(self._new_kp_entry)
-        act_del_entry = tools_m.addAction("&Delete Selected Entry")
-        act_del_entry.triggered.connect(self._delete_kp_entry)
 
         # ── Macros ──────────────────────────────────────────────────────
         macros_m = bar.addMenu("&Macros")
@@ -285,10 +295,10 @@ class SessionVaultApp(QMainWindow):
         if session is None:
             return
         menu = QMenu(self)
-        menu.addAction("Connect", lambda: self._connect(session))
-        menu.addAction("Edit…", lambda: self._edit_session(session))
+        menu.addAction("Connect",  lambda: self._connect(session))
+        menu.addAction("Edit…",    lambda: self._edit_session(session))
         menu.addSeparator()
-        menu.addAction("Delete", lambda: self._delete_session(session))
+        menu.addAction("Delete",   lambda: self._delete_session(session))
         menu.exec(self._sess_tree.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------------
@@ -296,20 +306,22 @@ class SessionVaultApp(QMainWindow):
     # ------------------------------------------------------------------
 
     def _new_session(self) -> None:
-        from app.dialogs.new_session import NewSessionDialog
+        from app.dialogs.new_session import NewSessionDialog  # noqa: PLC0415
         dlg = NewSessionDialog(self)
         if dlg.exec() and dlg.result_session:
             self._session_mgr.add(dlg.result_session)
             self._refresh_session_tree()
             self._status(f"Session '{dlg.result_session.name}' created.")
+            log.info("Session created: %s", dlg.result_session.name)
 
     def _edit_session(self, session: SSHSessionConfig) -> None:
-        from app.dialogs.new_session import NewSessionDialog
+        from app.dialogs.new_session import NewSessionDialog  # noqa: PLC0415
         dlg = NewSessionDialog(self, session=session)
         if dlg.exec() and dlg.result_session:
             self._session_mgr.update(dlg.result_session)
             self._refresh_session_tree()
             self._status(f"Session '{session.name}' updated.")
+            log.info("Session updated: %s", session.name)
 
     def _delete_session(self, session: SSHSessionConfig) -> None:
         reply = QMessageBox.question(
@@ -322,6 +334,7 @@ class SessionVaultApp(QMainWindow):
             self._session_mgr.delete(session.id)
             self._refresh_session_tree()
             self._status(f"Session '{session.name}' deleted.")
+            log.info("Session deleted: %s", session.name)
 
     def _connect(self, session: SSHSessionConfig) -> None:
         if session.id in self._terminals:
@@ -361,8 +374,8 @@ class SessionVaultApp(QMainWindow):
         idx = self._tabs.addTab(widget, session.name)
         self._tabs.setCurrentIndex(idx)
         self._status(f"Connecting to {session.name}…")
+        log.info("Connecting to session: %s (%s)", session.name, session.protocol)
 
-        # Fire plugin connect hooks
         plugin_loader.api.fire_connect(session)
 
     # ------------------------------------------------------------------
@@ -390,12 +403,13 @@ class SessionVaultApp(QMainWindow):
                 "pykeepass is not installed.\nRun: pip install pykeepass",
             )
             return
-        from app.dialogs.keepass_open import KeePassOpenDialog
+        from app.dialogs.keepass_open import KeePassOpenDialog  # noqa: PLC0415
         dlg = KeePassOpenDialog(self)
         if dlg.exec():
-            self._refresh_kp_panel()
+            self._kp_panel.refresh()
             name = pathlib.Path(keepass_manager.db_path).name
             self._status(f"KeePass '{name}' opened.")
+            log.info("KeePass database opened via dialog: %s", name)
 
     def _new_keepass(self) -> None:
         if not PYKEEPASS_AVAILABLE:
@@ -404,98 +418,57 @@ class SessionVaultApp(QMainWindow):
                 "pykeepass is not installed.\nRun: pip install pykeepass",
             )
             return
-        from app.dialogs.keepass_editor import KeePassNewDatabaseDialog
+        from app.dialogs.keepass_editor import KeePassNewDatabaseDialog  # noqa: PLC0415
         dlg = KeePassNewDatabaseDialog(self)
         if dlg.exec():
-            self._refresh_kp_panel()
+            self._kp_panel.refresh()
             name = pathlib.Path(keepass_manager.db_path).name
-            self._status(f"New KeePass database '{name}' created and opened.")
+            self._status(f"New KeePass database '{name}' created.")
+            log.info("New KeePass database created: %s", name)
 
-    def _lock_keepass(self) -> None:
+    def _lock_active_keepass(self) -> None:
+        path = keepass_manager.db_path
+        if not path:
+            self._status("No active KeePass database.")
+            return
+        name = pathlib.Path(path).name
+        keepass_manager.close_db(path)
+        self._kp_panel.refresh()
+        self._status(f"KeePass '{name}' locked.")
+        log.info("KeePass database locked: %s", path)
+
+    def _lock_all_keepass(self) -> None:
+        count = len(keepass_manager.open_paths)
         keepass_manager.lock()
-        self._refresh_kp_panel()
-        self._status("KeePass database locked.")
+        self._kp_panel.refresh()
+        self._status(f"All KeePass databases locked ({count} db(s) cleared).")
+        log.info("All KeePass databases locked")
 
     def _new_kp_entry(self) -> None:
         if not keepass_manager.is_open:
-            QMessageBox.warning(
-                self, "KeePass", "Open a KeePass database first."
-            )
+            QMessageBox.warning(self, "KeePass", "Open a KeePass database first.")
             return
-        from app.dialogs.keepass_editor import KeePassEntryDialog
+        from app.dialogs.keepass_editor import KeePassEntryDialog  # noqa: PLC0415
         dlg = KeePassEntryDialog(self)
         if dlg.exec():
-            self._refresh_kp_panel()
+            self._kp_panel.refresh()
             self._status("KeePass entry added.")
 
-    def _delete_kp_entry(self) -> None:
-        row = self._kp_list.currentRow()
-        entries = getattr(self, "_kp_entries", [])
-        if row < 0 or row >= len(entries):
-            return
-        entry = entries[row]
-        reply = QMessageBox.question(
-            self,
-            "Delete Entry",
-            f"Delete entry '{entry.title or '(no title)'}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            ok = keepass_manager.delete_entry(str(entry.uuid))
-            if ok:
-                self._refresh_kp_panel()
-                self._status("Entry deleted.")
-            else:
-                QMessageBox.critical(self, "Error", "Could not delete entry.")
+    # ------------------------------------------------------------------
+    # Terminal auto-fill  (from KeePass panel signal)
+    # ------------------------------------------------------------------
 
-    def _refresh_kp_panel(self) -> None:
-        self._kp_list.clear()
-        self._kp_entries: list = []
-        if not keepass_manager.is_open:
-            self._kp_list.addItem("  (no database open)")
-            return
-        self._kp_entries = keepass_manager.get_all_entries()
-        for e in self._kp_entries:
-            label = f"  {e.title or '(no title)'}"
-            if e.username:
-                label += f"   [{e.username}]"
-            self._kp_list.addItem(label)
-
-    def _on_kp_context_menu(self, pos) -> None:
-        item = self._kp_list.itemAt(pos)
-        if item is None:
-            return
-        idx = self._kp_list.row(item)
-        entries = getattr(self, "_kp_entries", [])
-        if idx >= len(entries):
-            return
-        entry = entries[idx]
-        menu = QMenu(self)
-        menu.addAction("Copy Username", lambda: self._clipboard(entry.username or ""))
-        menu.addAction("Copy Password", lambda: self._clipboard(entry.password or ""))
-        menu.addAction("Copy URL", lambda: self._clipboard(entry.url or ""))
-        menu.addSeparator()
-        menu.addAction("Edit Entry…", lambda: self._edit_kp_entry(entry))
-        menu.addAction("Delete Entry", lambda: self._delete_kp_entry_direct(entry))
-        menu.exec(self._kp_list.viewport().mapToGlobal(pos))
-
-    def _edit_kp_entry(self, entry) -> None:
-        from app.dialogs.keepass_editor import KeePassEntryDialog
-        dlg = KeePassEntryDialog(self, entry=entry)
-        if dlg.exec():
-            self._refresh_kp_panel()
-            self._status("KeePass entry updated.")
-
-    def _delete_kp_entry_direct(self, entry) -> None:
-        reply = QMessageBox.question(
-            self,
-            "Delete Entry",
-            f"Delete entry '{entry.title or '(no title)'}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            keepass_manager.delete_entry(str(entry.uuid))
-            self._refresh_kp_panel()
+    def _autofill_terminal(self, username: str, password: str) -> None:
+        """Paste KeePass credentials into the currently active terminal tab."""
+        widget = self._tabs.currentWidget()
+        if isinstance(widget, SSHTerminalWidget):
+            if username:
+                widget.send_input(username)
+            if password:
+                widget.send_input(password)
+            log.debug("KeePass auto-fill sent to active terminal")
+        else:
+            self._status("No active terminal for auto-fill.")
 
     # ------------------------------------------------------------------
     # MobaXterm import
@@ -513,6 +486,7 @@ class SessionVaultApp(QMainWindow):
         try:
             sessions = MobaXtermImporter.parse_file(path)
         except Exception as exc:
+            log.error("MobaXterm import error: %s", exc)
             QMessageBox.critical(self, "Import Error", str(exc))
             return
 
@@ -537,13 +511,14 @@ class SessionVaultApp(QMainWindow):
             added = self._session_mgr.import_sessions(sessions)
             self._refresh_session_tree()
             self._status(f"Imported {added} new session(s) from MobaXterm.")
+            log.info("MobaXterm import: %d sessions added", added)
 
     # ------------------------------------------------------------------
     # Macros
     # ------------------------------------------------------------------
 
     def _open_macro_manager(self) -> None:
-        from app.macros.dialog import MacroManagerDialog
+        from app.macros.dialog import MacroManagerDialog  # noqa: PLC0415
         dlg = MacroManagerDialog(self)
         dlg.exec()
 
@@ -552,10 +527,9 @@ class SessionVaultApp(QMainWindow):
     # ------------------------------------------------------------------
 
     def _open_settings(self) -> None:
-        from app.dialogs.settings import SettingsDialog
+        from app.dialogs.settings import SettingsDialog  # noqa: PLC0415
         dlg = SettingsDialog(self)
         if dlg.exec():
-            # Re-apply icon in case it changed
             icon_path = settings_manager.get("app_icon", "")
             if icon_path:
                 self.setWindowIcon(QIcon(icon_path))
@@ -564,10 +538,6 @@ class SessionVaultApp(QMainWindow):
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
-
-    def _clipboard(self, text: str) -> None:
-        QApplication.clipboard().setText(text)
-        self._status("Copied to clipboard.")
 
     def _status(self, msg: str) -> None:
         self._status_lbl.setText(msg)
