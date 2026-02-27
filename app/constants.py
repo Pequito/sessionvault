@@ -9,8 +9,9 @@ APP_VERSION = "2.0.0"
 DATA_DIR = pathlib.Path.home() / ".sessionvault"
 SESSIONS_FILE = DATA_DIR / "sessions.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
-MACROS_FILE = DATA_DIR / "macros.json"
-PLUGINS_DIR = DATA_DIR / "plugins"
+MACROS_FILE   = DATA_DIR / "macros.json"
+PLUGINS_DIR   = DATA_DIR / "plugins"
+LOGS_DIR      = DATA_DIR / "logs"
 
 # ---------------------------------------------------------------------------
 # Catppuccin Mocha (default dark theme)

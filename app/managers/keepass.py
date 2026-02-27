@@ -1,10 +1,18 @@
-"""Thread-safe KeePass database manager – read + write."""
+"""Thread-safe KeePass database manager – multi-database, read + write.
+
+Multiple .kdbx databases can be open simultaneously.  All single-database
+methods (``get_all_entries``, ``add_entry``, …) operate on the *active*
+database.  Use :meth:`set_active` to switch between databases and
+:attr:`open_paths` to list all currently-open ones.
+"""
 
 from __future__ import annotations
 
 import threading
 import uuid
 from typing import TYPE_CHECKING, Optional
+
+from app.managers.logger import get_logger
 
 if TYPE_CHECKING:
     from pykeepass import PyKeePass
@@ -16,14 +24,21 @@ try:
 except ImportError:
     PYKEEPASS_AVAILABLE = False
 
+log = get_logger(__name__)
+
 
 class KeePassManager:
-    """Thread-safe wrapper around a pykeepass database (read + write)."""
+    """Thread-safe manager supporting multiple open .kdbx databases.
+
+    All single-database convenience methods operate on the *active* database.
+    Switch the active database with :meth:`set_active` or :meth:`open`
+    (opening always makes the new database active).
+    """
 
     def __init__(self) -> None:
-        self._db: Optional["PyKeePass"] = None
+        self._dbs: dict[str, "PyKeePass"] = {}  # path → db instance
+        self._active_path: str = ""
         self._lock = threading.Lock()
-        self._db_path: str = ""
 
     # ------------------------------------------------------------------
     # Properties
@@ -31,31 +46,67 @@ class KeePassManager:
 
     @property
     def is_open(self) -> bool:
+        """True if at least one database is open."""
         with self._lock:
-            return self._db is not None
+            return bool(self._dbs)
 
     @property
     def db_path(self) -> str:
-        return self._db_path
+        """Path of the active database (empty string if none open)."""
+        return self._active_path
+
+    @property
+    def open_paths(self) -> list[str]:
+        """All currently open database paths (in insertion order)."""
+        with self._lock:
+            return list(self._dbs.keys())
+
+    # ------------------------------------------------------------------
+    # Active-database selection
+    # ------------------------------------------------------------------
+
+    def set_active(self, path: str) -> None:
+        """Make *path* the active database.  No-op if it is not open."""
+        with self._lock:
+            if path in self._dbs:
+                self._active_path = path
+                log.debug("Active KeePass database → %s", path)
+
+    def _active_db(self) -> Optional["PyKeePass"]:
+        """Return the active :class:`PyKeePass` instance (caller holds lock)."""
+        return self._dbs.get(self._active_path)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def open(self, path: str, password: str, keyfile: str = "") -> None:
-        """Open and unlock a .kdbx database.  Raises on failure."""
+        """Open / unlock a .kdbx file and make it the active database.
+
+        Raises :class:`RuntimeError` when pykeepass is not installed, and
+        re-raises pykeepass exceptions on bad credentials or corrupt files.
+        """
         if not PYKEEPASS_AVAILABLE:
             raise RuntimeError(
                 "pykeepass is not installed.  Run: pip install pykeepass"
             )
-        from pykeepass import PyKeePass as _KP
+        log.info("Opening KeePass database: %s", path)
+        from pykeepass import PyKeePass as _KP  # noqa: PLC0415
+        db = _KP(path, password=password or None, keyfile=keyfile or None)
         with self._lock:
-            self._db = _KP(
-                path,
-                password=password or None,
-                keyfile=keyfile or None,
-            )
-            self._db_path = path
+            self._dbs[path] = db
+            self._active_path = path
+        log.info("KeePass database opened: %s", path)
+
+    def close_db(self, path: str) -> None:
+        """Close (lock) a single database; switches active to another if needed."""
+        with self._lock:
+            if path not in self._dbs:
+                return
+            self._dbs.pop(path)
+            if self._active_path == path:
+                self._active_path = next(iter(self._dbs), "")
+        log.info("KeePass database closed: %s", path)
 
     def create_database(
         self,
@@ -64,72 +115,81 @@ class KeePassManager:
         keyfile: str = "",
         kdf: str = "argon2",
     ) -> None:
-        """Create a new blank .kdbx database and keep it open.
+        """Create a blank .kdbx database and open it as the active database.
 
-        kdf='argon2'  → KDBX4 with ChaCha20 + Argon2 (recommended)
-        kdf='aeskdf'  → KDBX3.1 with AES-256 + PBKDF2 (max compat)
+        kdf='argon2'  → KDBX4 with ChaCha20 + Argon2  (recommended)
+        kdf='aeskdf'  → KDBX3.1 with AES-256 + PBKDF2 (max compatibility)
         """
         if not PYKEEPASS_AVAILABLE:
             raise RuntimeError(
                 "pykeepass is not installed.  Run: pip install pykeepass"
             )
-        from pykeepass import create_database as _create
+        log.info("Creating new KeePass database: %s  kdf=%s", path, kdf)
+        from pykeepass import create_database as _create  # noqa: PLC0415
 
         kwargs: dict = dict(
             filename=path,
             password=password or None,
             keyfile=keyfile or None,
         )
-        # pykeepass ≥ 4.1 supports encryption= for KDBX4 / ChaCha20+Argon2.
-        # Older versions raise TypeError on unknown kwargs; fall back gracefully.
-        if kdf == "argon2":
-            kwargs["encryption"] = "chacha20"
-        else:
-            kwargs["encryption"] = "aes256"
+        # pykeepass ≥ 4.1 accepts encryption=; older versions raise TypeError
+        kwargs["encryption"] = "chacha20" if kdf == "argon2" else "aes256"
+        try:
+            db = _create(**kwargs)
+        except TypeError:
+            kwargs.pop("encryption", None)
+            db = _create(**kwargs)
 
         with self._lock:
-            try:
-                self._db = _create(**kwargs)
-            except TypeError:
-                kwargs.pop("encryption", None)
-                self._db = _create(**kwargs)
-            self._db_path = path
+            self._dbs[path] = db
+            self._active_path = path
+        log.info("KeePass database created: %s", path)
 
     def lock(self) -> None:
-        """Clear the in-memory database (credentials are wiped)."""
+        """Clear *all* in-memory databases (wipes credentials from memory)."""
         with self._lock:
-            self._db = None
-            self._db_path = ""
+            count = len(self._dbs)
+            self._dbs.clear()
+            self._active_path = ""
+        log.info("All KeePass databases locked (%d db(s) cleared)", count)
 
-    def save(self) -> None:
-        """Persist in-memory changes to disk."""
+    def save(self, path: str = "") -> None:
+        """Persist in-memory changes to disk.
+
+        Saves the specified *path* database, or the active one if omitted.
+        """
         with self._lock:
-            if self._db is not None:
-                self._db.save()
+            target = path or self._active_path
+            db = self._dbs.get(target)
+            if db is not None:
+                db.save()
+                log.debug("KeePass database saved: %s", target)
 
     # ------------------------------------------------------------------
-    # Read queries
+    # Read queries  (operate on the active database unless path given)
     # ------------------------------------------------------------------
 
-    def get_all_entries(self) -> list:
+    def get_all_entries(self, path: str = "") -> list:
+        """All entries in the active (or specified) database."""
         with self._lock:
-            if self._db is None:
-                return []
-            return list(self._db.entries)
+            db = self._dbs.get(path or self._active_path)
+            return list(db.entries) if db else []
 
-    def get_groups(self) -> list:
+    def get_groups(self, path: str = "") -> list:
+        """All groups in the active (or specified) database."""
         with self._lock:
-            if self._db is None:
-                return []
-            return list(self._db.groups)
+            db = self._dbs.get(path or self._active_path)
+            return list(db.groups) if db else []
 
-    def get_entry_by_uuid(self, uuid_str: str):
+    def get_entry_by_uuid(self, uuid_str: str, path: str = ""):
+        """Find an entry by UUID string in the active (or specified) database."""
         with self._lock:
-            if self._db is None:
+            db = self._dbs.get(path or self._active_path)
+            if db is None:
                 return None
             try:
                 target = uuid.UUID(uuid_str)
-                for entry in self._db.entries:
+                for entry in db.entries:
                     if entry.uuid == target:
                         return entry
             except Exception:
@@ -137,14 +197,27 @@ class KeePassManager:
             return None
 
     def get_password_for_session(self, session: "SSHSessionConfig") -> Optional[str]:
-        """Return the KeePass password linked to *session*, or None."""
+        """Return the KeePass password linked to *session*, or None.
+
+        Searches all open databases; tries the active one first.
+        """
         if not session.keepass_entry_uuid:
             return None
+        # Active db first
         entry = self.get_entry_by_uuid(session.keepass_entry_uuid)
-        return entry.password if entry else None
+        if entry:
+            return entry.password
+        # Fallback: search other open dbs
+        for path in self.open_paths:
+            if path == self._active_path:
+                continue
+            entry = self.get_entry_by_uuid(session.keepass_entry_uuid, path)
+            if entry:
+                return entry.password
+        return None
 
     # ------------------------------------------------------------------
-    # Write operations
+    # Write operations  (operate on the active database)
     # ------------------------------------------------------------------
 
     def add_entry(
@@ -156,18 +229,21 @@ class KeePassManager:
         url: str = "",
         notes: str = "",
     ) -> Optional[object]:
-        """Add a new entry.  Returns the created entry or None on error."""
+        """Add a new entry to the active database.  Returns the entry or None."""
         with self._lock:
-            if self._db is None:
+            db = self._active_db()
+            if db is None:
+                log.warning("add_entry called with no active database")
                 return None
-            group = self._db.find_groups(name=group_name, first=True)
+            group = db.find_groups(name=group_name, first=True)
             if group is None:
-                group = self._db.add_group(self._db.root_group, group_name)
-            entry = self._db.add_entry(
+                group = db.add_group(db.root_group, group_name)
+            entry = db.add_entry(
                 group, title, username, password,
                 url=url or None, notes=notes or None,
             )
-            self._db.save()
+            db.save()
+            log.info("KeePass entry added: %s / %s", group_name, title)
             return entry
 
     def update_entry(
@@ -180,13 +256,14 @@ class KeePassManager:
         url: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> bool:
-        """Update fields of an existing entry.  Returns True on success."""
+        """Update fields on an existing entry in the active database."""
         with self._lock:
-            if self._db is None:
+            db = self._active_db()
+            if db is None:
                 return False
             try:
                 target = uuid.UUID(uuid_str)
-                for entry in self._db.entries:
+                for entry in db.entries:
                     if entry.uuid == target:
                         if title is not None:
                             entry.title = title
@@ -198,26 +275,29 @@ class KeePassManager:
                             entry.url = url
                         if notes is not None:
                             entry.notes = notes
-                        self._db.save()
+                        db.save()
+                        log.info("KeePass entry updated: %s", uuid_str)
                         return True
-            except Exception:
-                pass
+            except Exception as exc:
+                log.error("Error updating entry %s: %s", uuid_str, exc)
             return False
 
     def delete_entry(self, uuid_str: str) -> bool:
-        """Delete an entry by UUID.  Returns True on success."""
+        """Delete an entry by UUID from the active database."""
         with self._lock:
-            if self._db is None:
+            db = self._active_db()
+            if db is None:
                 return False
             try:
                 target = uuid.UUID(uuid_str)
-                for entry in list(self._db.entries):
+                for entry in list(db.entries):
                     if entry.uuid == target:
-                        self._db.delete_entry(entry)
-                        self._db.save()
+                        db.delete_entry(entry)
+                        db.save()
+                        log.info("KeePass entry deleted: %s", uuid_str)
                         return True
-            except Exception:
-                pass
+            except Exception as exc:
+                log.error("Error deleting entry %s: %s", uuid_str, exc)
             return False
 
 
