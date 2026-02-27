@@ -1,12 +1,18 @@
-"""Qt Style Sheet (QSS) for the Catppuccin Mocha dark theme."""
+"""Multi-theme Qt Style Sheet engine.
+
+Default: Catppuccin Mocha (dark).
+Available: Catppuccin Latte, Dracula, Nord, One Dark.
+
+Call ``apply_theme(name)`` to switch at runtime.
+"""
 
 from __future__ import annotations
 
-from app.constants import C
+from app.constants import C, THEMES, _ansi_16, ANSI_COLORS_16, ANSI_256_CACHE
 
 
 def stylesheet() -> str:
-    """Return the full application QSS stylesheet string."""
+    """Return the full QSS stylesheet for the currently active theme (C)."""
     return f"""
 /* ==========================================================================
    Global
@@ -228,6 +234,36 @@ QListWidget::item:hover:!selected {{
 }}
 
 /* ==========================================================================
+   Table widget
+   ========================================================================== */
+QTableWidget {{
+    background-color: {C["mantle"]};
+    color: {C["text"]};
+    border: none;
+    gridline-color: {C["surface0"]};
+    font-size: 9pt;
+}}
+
+QTableWidget::item {{
+    padding: 3px 6px;
+}}
+
+QTableWidget::item:selected {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+}}
+
+QHeaderView::section {{
+    background-color: {C["surface0"]};
+    color: {C["subtext0"]};
+    border: none;
+    border-right: 1px solid {C["surface1"]};
+    padding: 4px 8px;
+    font-weight: bold;
+    font-size: 9pt;
+}}
+
+/* ==========================================================================
    Buttons
    ========================================================================== */
 QPushButton {{
@@ -298,6 +334,34 @@ QLineEdit:disabled {{
 }}
 
 /* ==========================================================================
+   Spin boxes / combo boxes
+   ========================================================================== */
+QSpinBox, QComboBox {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    border-radius: 5px;
+    padding: 4px 8px;
+}}
+
+QSpinBox:focus, QComboBox:focus {{
+    border-color: {C["blue"]};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 20px;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    selection-background-color: {C["blue"]};
+    selection-color: {C["base"]};
+}}
+
+/* ==========================================================================
    Labels
    ========================================================================== */
 QLabel {{
@@ -332,6 +396,27 @@ QLabel#status-connecting {{
     font-size: 9pt;
     padding: 2px 8px;
     background-color: {C["surface0"]};
+}}
+
+/* ==========================================================================
+   Checkboxes
+   ========================================================================== */
+QCheckBox {{
+    color: {C["text"]};
+    spacing: 6px;
+}}
+
+QCheckBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {C["surface2"]};
+    border-radius: 3px;
+    background-color: {C["surface0"]};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {C["blue"]};
+    border-color: {C["blue"]};
 }}
 
 /* ==========================================================================
@@ -377,4 +462,32 @@ QGroupBox::title {{
 QDialogButtonBox QPushButton {{
     min-width: 80px;
 }}
+
+/* ==========================================================================
+   Tab widget inside dialogs (settings tabs)
+   ========================================================================== */
+QTabWidget#settings-tabs::pane {{
+    border: 1px solid {C["surface1"]};
+    border-radius: 4px;
+}}
 """
+
+
+def apply_theme(name: str) -> None:
+    """Switch the active theme and re-apply the QSS to the running application.
+
+    This mutates the module-level ``C`` and ``ANSI_COLORS_16`` so that any
+    code that reads from them will pick up the new colors on the next call.
+    """
+    import app.constants as _c
+    from PySide6.QtWidgets import QApplication
+
+    palette = THEMES.get(name, _c.MOCHA)
+    _c.C.update(palette)
+    new_ansi = _ansi_16(palette)
+    _c.ANSI_COLORS_16[:] = new_ansi
+    _c.ANSI_256_CACHE.clear()
+
+    app = QApplication.instance()
+    if app:
+        app.setStyleSheet(stylesheet())
