@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SessionVault</title>
+  <style>
+    /* ── Catppuccin Mocha palette ────────────────────────────── */
+    :root {
+      --base:     #1e1e2e;
+      --mantle:   #181825;
+      --crust:    #11111b;
+      --surface0: #313244;
+      --surface1: #45475a;
+      --overlay1: #7f849c;
+      --text:     #cdd6f4;
+      --subtext1: #bac2de;
+      --mauve:    #cba6f7;
+      --green:    #a6e3a1;
+      --red:      #f38ba8;
+      --yellow:   #f9e2af;
+      --blue:     #89b4fa;
+      --peach:    #fab387;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      min-height: 120px;
+      background: var(--base);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    header {
+      background: var(--crust);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--surface0);
+    }
+    header .logo { font-size: 18px; }
+    header h1 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--mauve);
+      flex: 1;
+    }
+    #status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--surface1);
+      flex-shrink: 0;
+    }
+    #status-dot.connected   { background: var(--green); }
+    #status-dot.locked      { background: var(--yellow); }
+    #status-dot.disconnected{ background: var(--red); }
+
+    /* ── State panels ─────────────────────────────────────────── */
+    .panel { padding: 14px; display: none; }
+    .panel.visible { display: block; }
+
+    .state-msg {
+      text-align: center;
+      color: var(--overlay1);
+      padding: 18px 0;
+      font-size: 12px;
+    }
+    .state-msg .icon { font-size: 24px; display: block; margin-bottom: 6px; }
+
+    /* ── Entry list ───────────────────────────────────────────── */
+    #entries-list { list-style: none; }
+
+    #entries-list li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--surface0);
+    }
+    #entries-list li:last-child { border-bottom: none; }
+
+    .entry-info { flex: 1; overflow: hidden; }
+    .entry-title {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .entry-user {
+      color: var(--subtext1);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ── Buttons ──────────────────────────────────────────────── */
+    .btn {
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 9px;
+      white-space: nowrap;
+    }
+    .btn-fill { background: var(--mauve);  color: var(--crust); }
+    .btn-copy { background: var(--surface0); color: var(--text); }
+    .btn-fill:hover { background: #d8b4fe; }
+    .btn-copy:hover { background: var(--surface1); }
+
+    /* ── Footer / save form ───────────────────────────────────── */
+    #footer {
+      border-top: 1px solid var(--surface0);
+      padding: 10px 14px;
+      display: flex;
+      gap: 6px;
+    }
+    #footer .btn { flex: 1; padding: 6px 0; }
+    .btn-save { background: var(--green); color: var(--crust); }
+    .btn-save:hover { background: #c3f5c3; }
+
+    /* ── Save form ────────────────────────────────────────────── */
+    #save-form { display: none; padding: 10px 14px; border-top: 1px solid var(--surface0); }
+    #save-form.visible { display: block; }
+    #save-form label { display: block; color: var(--subtext1); font-size: 11px; margin-bottom: 2px; }
+    #save-form input {
+      width: 100%;
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 12px;
+      padding: 4px 7px;
+      margin-bottom: 8px;
+    }
+    #save-form input:focus { outline: none; border-color: var(--mauve); }
+    #save-row { display: flex; gap: 6px; }
+    #save-row .btn { flex: 1; padding: 5px 0; }
+    .btn-cancel { background: var(--surface0); color: var(--text); }
+    .btn-cancel:hover { background: var(--surface1); }
+
+    .feedback {
+      padding: 6px 14px;
+      font-size: 11px;
+      text-align: center;
+    }
+    .feedback.ok  { color: var(--green); }
+    .feedback.err { color: var(--red);   }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <span class="logo">🔐</span>
+    <h1>SessionVault</h1>
+    <span id="status-dot" title="Connecting…"></span>
+  </header>
+
+  <!-- Loading panel -->
+  <div id="panel-loading" class="panel visible">
+    <p class="state-msg">
+      <span class="icon">⏳</span>
+      Connecting to SessionVault…
+    </p>
+  </div>
+
+  <!-- Not running panel -->
+  <div id="panel-offline" class="panel">
+    <p class="state-msg">
+      <span class="icon">🔌</span>
+      SessionVault is not running.<br>
+      Launch the app and enable Browser Integration<br>
+      in <em>Settings → Preferences → Browser</em>.
+    </p>
+  </div>
+
+  <!-- DB locked panel -->
+  <div id="panel-locked" class="panel">
+    <p class="state-msg">
+      <span class="icon">🔒</span>
+      No KeePass database is open.<br>
+      Open a database in SessionVault first.
+    </p>
+  </div>
+
+  <!-- Credentials panel -->
+  <div id="panel-creds" class="panel">
+    <ul id="entries-list"></ul>
+    <p id="no-match" class="state-msg" style="display:none">
+      <span class="icon">🔍</span>
+      No credentials found for this site.
+    </p>
+  </div>
+
+  <!-- Footer actions -->
+  <div id="footer" style="display:none">
+    <button class="btn btn-save" id="btn-show-save">+ Save login</button>
+    <button class="btn btn-copy" id="btn-refresh">↻ Refresh</button>
+  </div>
+
+  <!-- Save-new-login form -->
+  <div id="save-form">
+    <label>Title</label>
+    <input id="save-title" type="text" placeholder="example.com" />
+    <label>Username</label>
+    <input id="save-username" type="text" autocomplete="off" />
+    <label>Password</label>
+    <input id="save-password" type="password" autocomplete="new-password" />
+    <div id="save-row">
+      <button class="btn btn-save"   id="btn-do-save">Save</button>
+      <button class="btn btn-cancel" id="btn-cancel-save">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Inline feedback message -->
+  <div id="feedback" class="feedback" style="display:none"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

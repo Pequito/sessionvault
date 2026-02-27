@@ -66,6 +66,7 @@ class SessionVaultApp(QMainWindow):
         self._kp_panel.refresh()
         self._apply_saved_settings()
         self._load_plugins()
+        self._start_browser_server()
         log.info("%s %s started", APP_NAME, APP_VERSION)
 
     # ------------------------------------------------------------------
@@ -86,6 +87,18 @@ class SessionVaultApp(QMainWindow):
                 self._status(f"Plugins loaded: {', '.join(loaded)}")
                 log.info("Plugins loaded: %s", ", ".join(loaded))
             self._rebuild_plugin_menu()
+
+    def _start_browser_server(self) -> None:
+        if not settings_manager.get("browser_integration", False):
+            return
+        from app.browser.server import browser_server  # noqa: PLC0415
+        port = settings_manager.get("browser_port", 19456)
+        try:
+            browser_server.start(port)
+            self._status(f"Browser integration active on port {port}.")
+        except OSError as exc:
+            log.error("Browser server failed to start: %s", exc)
+            self._status(f"Browser server error: {exc}")
 
     # ------------------------------------------------------------------
     # UI construction
@@ -232,6 +245,9 @@ class SessionVaultApp(QMainWindow):
         tools_m.addSeparator()
         act_new_entry = tools_m.addAction("Add KeePass &Entry…")
         act_new_entry.triggered.connect(self._new_kp_entry)
+        tools_m.addSeparator()
+        act_browser = tools_m.addAction("&Browser Integration…")
+        act_browser.triggered.connect(self._open_browser_settings)
 
         # ── Macros ──────────────────────────────────────────────────────
         macros_m = bar.addMenu("&Macros")
@@ -523,6 +539,23 @@ class SessionVaultApp(QMainWindow):
         dlg.exec()
 
     # ------------------------------------------------------------------
+    # Browser integration
+    # ------------------------------------------------------------------
+
+    def _open_browser_settings(self) -> None:
+        """Open Settings dialog pre-navigated to the Browser tab."""
+        from app.dialogs.settings import SettingsDialog  # noqa: PLC0415
+        dlg = SettingsDialog(self)
+        # Browser tab is index 4 (Appearance=0 Terminal=1 AutoType=2 KeePass=3 Browser=4)
+        dlg.findChild(__import__("PySide6.QtWidgets", fromlist=["QTabWidget"]).QTabWidget
+                      ).setCurrentIndex(4)
+        if dlg.exec():
+            icon_path = settings_manager.get("app_icon", "")
+            if icon_path:
+                self.setWindowIcon(QIcon(icon_path))
+            self._rebuild_plugin_menu()
+
+    # ------------------------------------------------------------------
     # Settings
     # ------------------------------------------------------------------
 
@@ -538,6 +571,12 @@ class SessionVaultApp(QMainWindow):
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        from app.browser.server import browser_server  # noqa: PLC0415
+        browser_server.stop()
+        log.info("%s shutting down", APP_NAME)
+        super().closeEvent(event)
 
     def _status(self, msg: str) -> None:
         self._status_lbl.setText(msg)
