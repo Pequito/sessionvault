@@ -1,0 +1,531 @@
+"""Multi-theme Qt Style Sheet engine.
+
+Default: Catppuccin Mocha (dark).
+Available: Catppuccin Latte, Dracula, Nord, One Dark.
+
+Call ``apply_theme(name)`` to switch at runtime.
+
+Written by Christopher Malo
+"""
+
+from __future__ import annotations
+
+from app.constants import C, THEMES, _ansi_16, ANSI_COLORS_16, ANSI_256_CACHE
+
+
+def stylesheet() -> str:
+    """Return the full QSS stylesheet for the currently active theme (C)."""
+    return f"""
+/* ==========================================================================
+   Global
+   ========================================================================== */
+* {{
+    outline: none;
+}}
+
+QMainWindow, QWidget {{
+    background-color: {C["base"]};
+    color: {C["text"]};
+    font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+    font-size: 10pt;
+}}
+
+/* ==========================================================================
+   Menu bar
+   ========================================================================== */
+QMenuBar {{
+    background-color: {C["mantle"]};
+    color: {C["text"]};
+    padding: 2px 4px;
+    border-bottom: 1px solid {C["surface0"]};
+}}
+
+QMenuBar::item {{
+    padding: 4px 10px;
+    border-radius: 4px;
+}}
+
+QMenuBar::item:selected {{
+    background-color: {C["surface1"]};
+}}
+
+QMenu {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    padding: 4px 0;
+    border-radius: 6px;
+}}
+
+QMenu::item {{
+    padding: 5px 28px 5px 16px;
+}}
+
+QMenu::item:selected {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+    border-radius: 3px;
+}}
+
+QMenu::separator {{
+    height: 1px;
+    background: {C["surface1"]};
+    margin: 4px 8px;
+}}
+
+/* ==========================================================================
+   Status bar
+   ========================================================================== */
+QStatusBar {{
+    background-color: {C["mantle"]};
+    color: {C["subtext0"]};
+    font-size: 9pt;
+    border-top: 1px solid {C["surface0"]};
+    padding: 2px 8px;
+}}
+
+/* ==========================================================================
+   Splitter
+   ========================================================================== */
+QSplitter::handle {{
+    background-color: {C["surface0"]};
+}}
+
+QSplitter::handle:horizontal {{
+    width: 1px;
+}}
+
+QSplitter::handle:vertical {{
+    height: 1px;
+}}
+
+/* ==========================================================================
+   Scroll bars
+   ========================================================================== */
+QScrollBar:vertical {{
+    background: {C["mantle"]};
+    width: 8px;
+    margin: 0;
+}}
+
+QScrollBar::handle:vertical {{
+    background: {C["surface2"]};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+
+QScrollBar::handle:vertical:hover {{
+    background: {C["overlay0"]};
+}}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+
+QScrollBar:horizontal {{
+    background: {C["mantle"]};
+    height: 8px;
+    margin: 0;
+}}
+
+QScrollBar::handle:horizontal {{
+    background: {C["surface2"]};
+    border-radius: 4px;
+    min-width: 20px;
+}}
+
+QScrollBar::handle:horizontal:hover {{
+    background: {C["overlay0"]};
+}}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+
+/* ==========================================================================
+   Tab widget
+   ========================================================================== */
+QTabWidget::pane {{
+    border: none;
+    background-color: {C["base"]};
+}}
+
+QTabBar {{
+    background-color: {C["crust"]};
+}}
+
+QTabBar::tab {{
+    background-color: {C["surface0"]};
+    color: {C["subtext0"]};
+    padding: 6px 16px;
+    border: none;
+    border-right: 1px solid {C["surface1"]};
+    min-width: 80px;
+}}
+
+QTabBar::tab:selected {{
+    background-color: {C["base"]};
+    color: {C["text"]};
+    border-bottom: 2px solid {C["blue"]};
+}}
+
+QTabBar::tab:hover:!selected {{
+    background-color: {C["surface1"]};
+    color: {C["text"]};
+}}
+
+QTabBar::close-button {{
+    subcontrol-position: right;
+    padding: 2px;
+}}
+
+/* ==========================================================================
+   Tree widget
+   ========================================================================== */
+QTreeWidget {{
+    background-color: {C["mantle"]};
+    color: {C["text"]};
+    border: none;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10pt;
+}}
+
+QTreeWidget::item {{
+    padding: 2px 4px;
+    border-radius: 3px;
+}}
+
+QTreeWidget::item:selected {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+}}
+
+QTreeWidget::item:hover:!selected {{
+    background-color: {C["surface0"]};
+}}
+
+QTreeWidget::branch {{
+    background: {C["mantle"]};
+}}
+
+QTreeWidget::branch:has-children:closed {{
+    color: {C["overlay1"]};
+}}
+
+QTreeWidget::branch:has-children:open {{
+    color: {C["overlay1"]};
+}}
+
+/* ==========================================================================
+   List widget
+   ========================================================================== */
+QListWidget {{
+    background-color: {C["mantle"]};
+    color: {C["text"]};
+    border: none;
+    font-family: "Monospace", monospace;
+    font-size: 9pt;
+}}
+
+QListWidget::item {{
+    padding: 2px 8px;
+}}
+
+QListWidget::item:selected {{
+    background-color: {C["mauve"]};
+    color: {C["base"]};
+    border-radius: 3px;
+}}
+
+QListWidget::item:hover:!selected {{
+    background-color: {C["surface0"]};
+}}
+
+/* ==========================================================================
+   Table widget
+   ========================================================================== */
+QTableWidget {{
+    background-color: {C["mantle"]};
+    color: {C["text"]};
+    border: none;
+    gridline-color: {C["surface0"]};
+    font-size: 9pt;
+}}
+
+QTableWidget::item {{
+    padding: 3px 6px;
+}}
+
+QTableWidget::item:selected {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+}}
+
+QHeaderView::section {{
+    background-color: {C["surface0"]};
+    color: {C["subtext0"]};
+    border: none;
+    border-right: 1px solid {C["surface1"]};
+    padding: 4px 8px;
+    font-weight: bold;
+    font-size: 9pt;
+}}
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+QPushButton {{
+    background-color: {C["surface1"]};
+    color: {C["text"]};
+    border: none;
+    padding: 5px 14px;
+    border-radius: 5px;
+    font-size: 10pt;
+}}
+
+QPushButton:hover {{
+    background-color: {C["surface2"]};
+}}
+
+QPushButton:pressed {{
+    background-color: {C["surface0"]};
+}}
+
+QPushButton#primary {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+    font-weight: bold;
+}}
+
+QPushButton#primary:hover {{
+    background-color: {C["lavender"]};
+}}
+
+QPushButton#success {{
+    background-color: {C["green"]};
+    color: {C["base"]};
+    font-weight: bold;
+}}
+
+QPushButton#success:hover {{
+    background-color: {C["teal"]};
+}}
+
+QPushButton#danger {{
+    background-color: {C["red"]};
+    color: {C["base"]};
+}}
+
+QPushButton#danger:hover {{
+    background-color: {C["maroon"]};
+}}
+
+/* ==========================================================================
+   Line edits
+   ========================================================================== */
+QLineEdit {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    border-radius: 5px;
+    padding: 4px 8px;
+    selection-background-color: {C["blue"]};
+    selection-color: {C["base"]};
+}}
+
+QLineEdit:focus {{
+    border-color: {C["blue"]};
+}}
+
+QLineEdit:disabled {{
+    color: {C["overlay0"]};
+}}
+
+/* ==========================================================================
+   Spin boxes / combo boxes
+   ========================================================================== */
+QSpinBox, QComboBox {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    border-radius: 5px;
+    padding: 4px 8px;
+}}
+
+QSpinBox:focus, QComboBox:focus {{
+    border-color: {C["blue"]};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 20px;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    selection-background-color: {C["blue"]};
+    selection-color: {C["base"]};
+}}
+
+/* ==========================================================================
+   Labels
+   ========================================================================== */
+QLabel {{
+    color: {C["subtext0"]};
+}}
+
+QLabel#kp-entry {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-family: monospace;
+}}
+
+QLabel#status-connected {{
+    color: {C["green"]};
+    font-size: 9pt;
+    padding: 2px 8px;
+    background-color: {C["surface0"]};
+}}
+
+QLabel#status-error {{
+    color: {C["red"]};
+    font-size: 9pt;
+    padding: 2px 8px;
+    background-color: {C["surface0"]};
+}}
+
+QLabel#status-connecting {{
+    color: {C["yellow"]};
+    font-size: 9pt;
+    padding: 2px 8px;
+    background-color: {C["surface0"]};
+}}
+
+/* ==========================================================================
+   Checkboxes
+   ========================================================================== */
+QCheckBox {{
+    color: {C["text"]};
+    spacing: 6px;
+}}
+
+QCheckBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {C["surface2"]};
+    border-radius: 3px;
+    background-color: {C["surface0"]};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {C["blue"]};
+    border-color: {C["blue"]};
+}}
+
+/* ==========================================================================
+   Terminal text area
+   ========================================================================== */
+QTextEdit#terminal {{
+    background-color: {C["base"]};
+    color: {C["text"]};
+    border: none;
+    font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", "Courier New", monospace;
+    font-size: 11pt;
+    selection-background-color: {C["surface1"]};
+}}
+
+/* ==========================================================================
+   Dialogs
+   ========================================================================== */
+QDialog {{
+    background-color: {C["base"]};
+}}
+
+/* ==========================================================================
+   Group boxes
+   ========================================================================== */
+QGroupBox {{
+    border: 1px solid {C["surface1"]};
+    border-radius: 6px;
+    margin-top: 8px;
+    padding: 10px 8px 8px 8px;
+    color: {C["subtext0"]};
+}}
+
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {C["overlay2"]};
+}}
+
+/* ==========================================================================
+   KeePass panel toolbar buttons (+ / ✕)
+   ========================================================================== */
+QPushButton#kp-db-btn {{
+    background-color: {C["surface0"]};
+    color: {C["text"]};
+    border: 1px solid {C["surface1"]};
+    border-radius: 4px;
+    padding: 0px;
+    font-size: 13pt;
+    font-weight: bold;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+}}
+
+QPushButton#kp-db-btn:hover {{
+    background-color: {C["blue"]};
+    color: {C["base"]};
+    border-color: {C["blue"]};
+}}
+
+QPushButton#kp-db-btn:pressed {{
+    background-color: {C["lavender"]};
+    color: {C["base"]};
+}}
+
+/* ==========================================================================
+   Dialog button box
+   ========================================================================== */
+QDialogButtonBox QPushButton {{
+    min-width: 80px;
+}}
+
+/* ==========================================================================
+   Tab widget inside dialogs (settings tabs)
+   ========================================================================== */
+QTabWidget#settings-tabs::pane {{
+    border: 1px solid {C["surface1"]};
+    border-radius: 4px;
+}}
+"""
+
+
+def apply_theme(name: str) -> None:
+    """Switch the active theme and re-apply the QSS to the running application.
+
+    This mutates the module-level ``C`` and ``ANSI_COLORS_16`` so that any
+    code that reads from them will pick up the new colors on the next call.
+    """
+    import app.constants as _c
+    from PySide6.QtWidgets import QApplication
+
+    palette = THEMES.get(name, _c.MOCHA)
+    _c.C.update(palette)
+    new_ansi = _ansi_16(palette)
+    _c.ANSI_COLORS_16[:] = new_ansi
+    _c.ANSI_256_CACHE.clear()
+
+    app = QApplication.instance()
+    if app:
+        app.setStyleSheet(stylesheet())
