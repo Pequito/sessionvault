@@ -54,8 +54,11 @@ A Python SSH/RDP/VNC/Telnet client GUI with integrated KeePass credential manage
 
 | Platform                  | Additional requirement                  |
 |---------------------------|-----------------------------------------|
-| Linux (Fedora / RPM-based)| `sudo dnf install python3-xlib`         |
+| Linux (Arch / Manjaro)    | `sudo pacman -S python-xlib`            |
 | Linux (Debian / Ubuntu)   | `sudo apt install python3-xlib`         |
+| Linux (Fedora / RPM-based)| `sudo dnf install python3-xlib`         |
+| macOS                     | No additional package required          |
+| Windows                   | No additional package required          |
 
 **Details**  
 The `python3-xlib` library enables global Auto-Type (keystroke simulation) on X11-based Linux desktops.  
