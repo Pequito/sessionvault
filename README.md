@@ -52,9 +52,11 @@ A Python SSH/RDP/VNC/Telnet client GUI with integrated KeePass credential manage
 
 ### Platform notes
 
-| Platform | Additional requirement |
-|----------|----------------------|
-| Linux (X11 Auto-Type) | `sudo apt install python3-xlib` |
+| Platform                  | Additional requirement                  |
+|---------------------------|-----------------------------------------|
+| Linux (Fedora / RPM-based)| `sudo dnf install python3-xlib`         |
+| Linux (X11 Auto-Type)     | `sudo apt install python3-xlib`         |
+
 | macOS (Auto-Type) | Grant **Accessibility** permission in System Settings → Privacy |
 | RDP (Linux/macOS) | `xfreerdp` must be installed |
 | RDP (Windows) | `mstsc` is built in |
