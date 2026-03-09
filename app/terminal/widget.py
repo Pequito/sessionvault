@@ -112,11 +112,33 @@ class SSHWorker(QObject):
                 "username": self._session.username,
                 "timeout": 15,
             }
+
             if self._session.key_path:
+                # Explicit key file supplied — use it exclusively, skip agent
+                # to prevent FIDO2/hardware-token keys from crashing auth
                 kwargs["key_filename"] = self._session.key_path
+                kwargs["allow_agent"] = False
+                kwargs["look_for_keys"] = False
+            elif self._password:
+                # Password supplied — use it only, skip agent for same reason
+                kwargs["allow_agent"] = False
+                kwargs["look_for_keys"] = False
+
             if self._password:
                 kwargs["password"] = self._password
-            client.connect(**kwargs)
+
+            try:
+                client.connect(**kwargs)
+            except paramiko.ssh_exception.SSHException as _agent_err:
+                # Retry without the SSH agent — catches FIDO2 / hardware-token
+                # keys in the agent that paramiko cannot sign with
+                if "key cannot be used" in str(_agent_err).lower() or "signing" in str(_agent_err).lower():
+                    kwargs["allow_agent"] = False
+                    kwargs["look_for_keys"] = False
+                    client.connect(**kwargs)
+                else:
+                    raise
+
             self._ssh = client
             transport = client.get_transport()
 
