@@ -5,7 +5,7 @@ Written by Christopher Malo
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -111,8 +111,18 @@ class KeePassOpenDialog(QDialog):
         if last_paths:
             self._db_edit.setText(last_paths[0])
             self._hint_lbl.setVisible(True)
-            self._pw_edit.setFocus()
+        def showEvent(self, event) -> None:
+            super().showEvent(event)
+            if self._db_edit.text().strip():
+                QTimer.singleShot(0, self._pw_edit.setFocus)
+            else:
+                QTimer.singleShot(0, self._db_edit.setFocus)
+            if self.parent():
+                geo = self.frameGeometry()
+                geo.moveCenter(self.parent().geometry().center())
+                self.move(geo.topLeft())
 
+    
     def _save_last_path(self, path: str) -> None:
         """Persist ``path`` as the most-recently-used database."""
         last_paths: list[str] = settings_manager.get("keepass_last_paths", [])
