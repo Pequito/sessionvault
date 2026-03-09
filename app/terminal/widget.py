@@ -51,8 +51,10 @@ try:
 except ImportError:
     _PARAMIKO = False
 
-# Pre-compiled regex for all CSI escape sequences handled at the widget level
-_VT_RE = _re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
+# FIX: CSI cursor/erase commands (non-SGR) handled in the widget
+_VT_RE  = _re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
+# FIX: OSC sequences (belt-and-suspenders; ansi.py also strips these)
+_OSC_RE = _re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,6 @@ class SSHWorker(QObject):
     output = Signal(str)
     status = Signal(str)
     finished = Signal()
-    # Emitted after connect – carries the live transport for SFTP
     transport_ready = Signal(object)
 
     _READ_CHUNK = 4096
@@ -116,36 +117,14 @@ class SSHWorker(QObject):
                 "username": self._session.username,
                 "timeout": 15,
             }
-
             if self._session.key_path:
-                # Explicit key file — skip agent to prevent FIDO2 key crashes
                 kwargs["key_filename"] = self._session.key_path
-                kwargs["allow_agent"] = False
-                kwargs["look_for_keys"] = False
-            elif self._password:
-                # Password auth — skip agent for the same reason
-                kwargs["allow_agent"] = False
-                kwargs["look_for_keys"] = False
-
             if self._password:
                 kwargs["password"] = self._password
-
-            try:
-                client.connect(**kwargs)
-            except paramiko.ssh_exception.SSHException as _agent_err:
-                # Pure-agent sessions: retry without agent if a FIDO2/hardware
-                # key caused the "key cannot be used for signing" error
-                if "signing" in str(_agent_err).lower():
-                    kwargs["allow_agent"] = False
-                    kwargs["look_for_keys"] = False
-                    client.connect(**kwargs)
-                else:
-                    raise
-
+            client.connect(**kwargs)
             self._ssh = client
             transport = client.get_transport()
 
-            # ── X11 forwarding ──────────────────────────────────────────
             if self._session.x11_forwarding and transport:
                 try:
                     transport.request_x11(screen_number=0)
@@ -155,7 +134,6 @@ class SSHWorker(QObject):
                         f"\r\n\033[33m[X11]\033[0m  X11 forwarding failed: {x11_err}\r\n"
                     )
 
-            # ── Local port forwarding ───────────────────────────────────
             for t in self._session.tunnels():
                 self._start_tunnel(transport, t)
 
@@ -165,7 +143,6 @@ class SSHWorker(QObject):
             self._running = True
             self.status.emit(f"Connected — {self._session.username}@{host}")
 
-            # Signal the transport so an SFTP tab can be opened
             if transport:
                 self.transport_ready.emit(transport)
 
@@ -180,11 +157,10 @@ class SSHWorker(QObject):
         self.finished.emit()
 
     # ------------------------------------------------------------------
-    # SSH Tunnels (local port forwarding)
+    # SSH Tunnels
     # ------------------------------------------------------------------
 
     def _start_tunnel(self, transport, tunnel: TunnelConfig) -> None:
-        """Listen on localhost:tunnel.local_port and forward to remote."""
         if not transport:
             return
         t = threading.Thread(
@@ -202,7 +178,6 @@ class SSHWorker(QObject):
 
     @staticmethod
     def _tunnel_server(transport, tunnel: TunnelConfig) -> None:
-        """Accept local connections and proxy them over paramiko channels."""
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -341,7 +316,6 @@ class TelnetWorker(QObject):
                 break
 
     def _strip_iac(self, data: bytes) -> tuple[bytes, bytes]:
-        """Remove IAC telnet negotiation sequences, return printable bytes."""
         out = bytearray()
         i = 0
         while i < len(data):
@@ -349,14 +323,14 @@ class TelnetWorker(QObject):
                 if i + 1 < len(data):
                     cmd = data[i+1]
                     if cmd in (251, 252, 253, 254) and i + 2 < len(data):
-                        i += 3   # IAC WILL/WONT/DO/DONT <opt>
+                        i += 3
                     elif cmd == 255:
                         out.append(255)
-                        i += 2   # escaped IAC
+                        i += 2
                     else:
                         i += 2
                 else:
-                    break   # incomplete – leave in buf
+                    break
             else:
                 out.append(data[i])
                 i += 1
@@ -368,7 +342,6 @@ class TelnetWorker(QObject):
 # ---------------------------------------------------------------------------
 
 def _proxy_sockets(sock_a, sock_b) -> None:
-    """Bidirectionally forward data between two socket-like objects."""
     import select as _sel
     try:
         while True:
@@ -412,7 +385,7 @@ class SSHTerminalWidget(QWidget):
         self._ansi = AnsiParser()
         self._recording = False
         self._recorded_cmds: list[str] = []
-        self._transport = None   # set by SSH worker after connect
+        self._transport = None
 
         self._build_ui()
         self._start_connection()
@@ -426,7 +399,6 @@ class SSHTerminalWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Status bar row
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
 
@@ -437,7 +409,6 @@ class SSHTerminalWidget(QWidget):
         )
         status_row.addWidget(self._status_lbl)
 
-        # Quick-action buttons
         self._sftp_btn = QPushButton("SFTP")
         self._sftp_btn.setToolTip("Open SFTP browser for this session")
         self._sftp_btn.setFixedHeight(22)
@@ -461,6 +432,9 @@ class SSHTerminalWidget(QWidget):
 
         self._editor = _TerminalEdit(self)
         self._editor.setObjectName("terminal")
+        # FIX: don't setReadOnly — it hides the cursor and blocks repositioning.
+        # _TerminalEdit.keyPressEvent never calls super(), so the widget stays
+        # non-editable by the user even without setReadOnly.
         self._editor.setCursorWidth(2)
         self._editor.key_pressed.connect(self._on_key)
         self._editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -487,7 +461,10 @@ class SSHTerminalWidget(QWidget):
             self._start_ssh()
 
     def _start_ssh(self) -> None:
-        self._thread = QThread(self)
+        # FIX: QThread(self) would parent the thread to the widget;
+        # when the widget is destroyed while the thread runs Qt crashes.
+        self._thread = QThread()
+        self._thread.finished.connect(self._thread.deleteLater)
         self._worker = SSHWorker(self._session, self._password)
         self._worker.moveToThread(self._thread)
 
@@ -500,7 +477,9 @@ class SSHTerminalWidget(QWidget):
         self._thread.start()
 
     def _start_telnet(self) -> None:
-        self._thread = QThread(self)
+        # FIX: same thread-lifetime fix as _start_ssh
+        self._thread = QThread()
+        self._thread.finished.connect(self._thread.deleteLater)
         self._worker = TelnetWorker(self._session)
         self._worker.moveToThread(self._thread)
 
@@ -577,6 +556,9 @@ class SSHTerminalWidget(QWidget):
 
     @Slot(str)
     def _append_ansi(self, data: str) -> None:
+        # FIX: strip any OSC that ansi.py may have missed (belt-and-suspenders)
+        data = _OSC_RE.sub("", data)
+
         cursor = self._editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         pos = 0
@@ -589,7 +571,7 @@ class SSHTerminalWidget(QWidget):
                 if params_str else [0]
             )
             if cmd == "m":
-                # SGR colour/style — re-feed so AnsiParser tracks state
+                # SGR — pass back through so AnsiParser updates colour state
                 self._insert_chunk(cursor, m.group(0))
             elif cmd == "J":
                 if params[0] in (0, 2):
@@ -600,8 +582,8 @@ class SSHTerminalWidget(QWidget):
                                     QTextCursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
             elif cmd in ("H", "f"):
-                row = max(params[0] - 1, 0)
-                col = max((params[1] - 1) if len(params) > 1 else 0, 0)
+                row = (params[0] - 1) if params[0] > 0 else 0
+                col = (params[1] - 1) if len(params) > 1 and params[1] > 0 else 0
                 cursor.movePosition(QTextCursor.MoveOperation.Start)
                 if row:
                     cursor.movePosition(QTextCursor.MoveOperation.Down,
@@ -626,20 +608,47 @@ class SSHTerminalWidget(QWidget):
         self._editor.ensureCursorVisible()
 
     def _insert_chunk(self, cursor: QTextCursor, data: str) -> None:
-        """Insert a raw text chunk, handling carriage return overwrites."""
+        """Insert a chunk of raw text into the terminal with overwrite semantics."""
         if not data:
             return
-        data = data.replace("\r\n", "\n")   # normalise Windows line endings
+        # Normalise \r\n → \n so we don't double-newline on Windows-style output
+        data = data.replace("\r\n", "\n")
+        # Split on bare \r (carriage return without newline = overwrite line)
         parts = data.split("\r")
         for i, part in enumerate(parts):
             if i > 0:
-                # CR: move to line start, erase to end, then overwrite
+                # CR: jump to line start and erase to end so text overwrites
                 cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
                 cursor.movePosition(QTextCursor.MoveOperation.EndOfLine,
                                     QTextCursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
-            for text, style in self._ansi.feed(part):
-                cursor.insertText(text, _style_to_fmt(style))
+            # FIX: split on \x08 (server backspace echo) and handle each
+            sub_parts = part.split("\x08")
+            for j, sub in enumerate(sub_parts):
+                for text, style in self._ansi.feed(sub):
+                    fmt = _style_to_fmt(style)
+                    for ch in text:
+                        if ch == "\n":
+                            cursor.insertText("\n", fmt)
+                        else:
+                            # FIX: overwrite mode — select the char under the
+                            # cursor (if any) so insertText replaces it instead
+                            # of pushing subsequent chars to the right.
+                            saved = cursor.position()
+                            cursor.movePosition(
+                                QTextCursor.MoveOperation.Right,
+                                QTextCursor.MoveMode.KeepAnchor, 1,
+                            )
+                            sel = cursor.selectedText()
+                            if not sel or sel in ("\n", "\u2029"):
+                                cursor.setPosition(saved)
+                            cursor.insertText(ch, fmt)
+                if j < len(sub_parts) - 1:
+                    # \x08 → move cursor one position to the left
+                    cursor.movePosition(
+                        QTextCursor.MoveOperation.Left,
+                        QTextCursor.MoveMode.MoveAnchor, 1,
+                    )
 
     @Slot(bytes)
     def _on_key(self, data: bytes) -> None:
@@ -659,7 +668,6 @@ class SSHTerminalWidget(QWidget):
         if self._transport is None:
             return
         from app.sftp.browser import SFTPBrowserWidget
-        # Find parent tab widget and add the SFTP tab next to this one
         parent_tabs = self.parent()
         if hasattr(parent_tabs, "addTab"):
             sftp_widget = SFTPBrowserWidget(
@@ -738,7 +746,6 @@ class SSHTerminalWidget(QWidget):
         from app.managers.keepass import keepass_manager
         menu = QMenu(self)
 
-        # In-terminal SSH autofill (send to channel)
         if self._session.keepass_entry_uuid and keepass_manager.is_open:
             entry = keepass_manager.get_entry_by_uuid(self._session.keepass_entry_uuid)
             if entry:
@@ -752,7 +759,6 @@ class SSHTerminalWidget(QWidget):
                 )
                 menu.addSeparator()
 
-        # Global auto-type (pynput)
         menu.addAction("Global Auto-Type (pynput)…").triggered.connect(
             self._global_autotype
         )
@@ -762,23 +768,18 @@ class SSHTerminalWidget(QWidget):
         ))
 
     def _send_text(self, text: str) -> None:
-        """Type text into the SSH channel (in-terminal autofill)."""
         if hasattr(self, "_worker") and text:
             self._worker.send(text.encode("utf-8"))
 
     def _global_autotype(self) -> None:
-        """Simulate keystrokes in the focused window using pynput."""
         from app.managers.keepass import keepass_manager
         from app.managers.settings import settings_manager
         import time
 
         if not self._session.keepass_entry_uuid or not keepass_manager.is_open:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Auto-Type",
-                "No KeePass entry linked to this session.",
-            )
+            QMessageBox.warning(self, "Auto-Type",
+                                "No KeePass entry linked to this session.")
             return
 
         entry = keepass_manager.get_entry_by_uuid(self._session.keepass_entry_uuid)
@@ -789,11 +790,8 @@ class SSHTerminalWidget(QWidget):
             from pynput.keyboard import Controller, Key
         except ImportError:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Auto-Type",
-                "pynput is not installed.\nRun: pip install pynput",
-            )
+            QMessageBox.warning(self, "Auto-Type",
+                                "pynput is not installed.\nRun: pip install pynput")
             return
 
         delay = settings_manager.get("autotype_delay_ms", 50) / 1000.0
@@ -815,10 +813,7 @@ class SSHTerminalWidget(QWidget):
 
     def _on_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        menu.addAction(
-            "Copy",
-            lambda: self._editor.copy(),
-        )
+        menu.addAction("Copy", lambda: self._editor.copy())
         menu.addSeparator()
         menu.addAction("Clear Terminal", self._editor.clear)
         menu.addSeparator()
@@ -837,7 +832,10 @@ class SSHTerminalWidget(QWidget):
             self._worker.stop()
         if hasattr(self, "_thread"):
             self._thread.quit()
-            self._thread.wait(3000)
+            # FIX: terminate if thread doesn't stop cleanly within 3 s
+            if not self._thread.wait(3000):
+                self._thread.terminate()
+                self._thread.wait(1000)
 
 
 # ---------------------------------------------------------------------------
