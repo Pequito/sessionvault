@@ -37,6 +37,8 @@ class SSHConnectDialog(QDialog):
         The username to use (may have been pre-filled from the session config).
     password : str | None
         The password chosen by the user, or ``None`` if cancelled.
+    otp : str | None
+        PIN + YubiKey OTP value, or ``None`` if not provided.
     """
 
     def __init__(
@@ -55,6 +57,7 @@ class SSHConnectDialog(QDialog):
         self._port     = port
         self._pre_user = username
         self.password: Optional[str] = None
+        self.otp: Optional[str] = None
 
         self._build_ui()
         self._populate_keepass_entries()
@@ -87,6 +90,12 @@ class SSHConnectDialog(QDialog):
         self._pw_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._pw_edit.setPlaceholderText("password")
         form.addRow("Password", self._pw_edit)
+
+        # YubiKey OTP (PIN + OTP appended to password on connect)
+        self._otp_edit = QLineEdit()
+        self._otp_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._otp_edit.setPlaceholderText("PIN then touch YubiKey (optional)")
+        form.addRow("PIN + OTP", self._otp_edit)
 
         root.addLayout(form)
 
@@ -131,7 +140,8 @@ class SSHConnectDialog(QDialog):
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
-        self._pw_edit.returnPressed.connect(self._accept)
+        self._pw_edit.returnPressed.connect(self._otp_edit.setFocus)
+        self._otp_edit.returnPressed.connect(self._accept)
 
     # ------------------------------------------------------------------
     # KeePass integration
@@ -197,5 +207,6 @@ class SSHConnectDialog(QDialog):
 
     def _accept(self) -> None:
         self.username = self._user_edit.text()
-        self.password = self._pw_edit.text()
+        self.password = self._pw_edit.text() or None
+        self.otp = self._otp_edit.text() or None
         self.accept()
