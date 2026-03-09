@@ -30,8 +30,9 @@ Style = dict  # {"fg": str|None, "bg": str|None, "bold": bool, "underline": bool
 # ---------------------------------------------------------------------------
 # Regex patterns
 # ---------------------------------------------------------------------------
-_CSI_RE = re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
+_CSI_RE      = re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
 _BARE_ESC_RE = re.compile(r"\x1b[^\x1b]?")
+_OSC_RE      = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")   # FIX: strip OSC
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,6 @@ def color_256(n: int) -> str:
     if n < 16:
         color = ANSI_COLORS_16[n]
     elif n < 232:
-        # 6×6×6 colour cube
         idx = n - 16
         b = idx % 6
         g = (idx // 6) % 6
@@ -56,7 +56,6 @@ def color_256(n: int) -> str:
 
         color = f"#{_v(r):02x}{_v(g):02x}{_v(b):02x}"
     else:
-        # 24-step greyscale ramp
         v = 8 + (n - 232) * 10
         color = f"#{v:02x}{v:02x}{v:02x}"
     ANSI_256_CACHE[n] = color
@@ -86,6 +85,9 @@ class AnsiParser:
 
     def feed(self, data: str) -> list[tuple[str, Style]]:
         """Parse *data* and return a list of (text, style) pairs."""
+        # FIX: strip OSC sequences (window title, etc.) before parsing
+        data = _OSC_RE.sub("", data)
+
         result: list[tuple[str, Style]] = []
         pos = 0
         for m in _CSI_RE.finditer(data):
@@ -117,7 +119,6 @@ class AnsiParser:
     def _handle_csi(self, params_str: str, command: str) -> None:
         if command == "m":
             self._handle_sgr(params_str)
-        # Other CSI commands (cursor movement, erase lines, …) are ignored
 
     def _handle_sgr(self, params_str: str) -> None:
         try:
