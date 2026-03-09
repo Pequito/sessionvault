@@ -465,7 +465,10 @@ class SessionVaultApp(QMainWindow):
                 username=session.username,
             )
             if dlg.exec():
-                password = dlg.password
+                password = dlg.password or ""
+                if dlg.otp:
+                    password = password + dlg.otp
+                password = password or None
                 # Allow the user to correct the username in the dialog
                 if dlg.username and dlg.username != session.username:
                     import dataclasses as _dc  # noqa: PLC0415
