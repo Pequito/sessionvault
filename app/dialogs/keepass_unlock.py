@@ -90,7 +90,7 @@ class KeePassUnlockDialog(QDialog):
             geo = self.frameGeometry()
             geo.moveCenter(self.parent().geometry().center())
             self.move(geo.topLeft())
-    
+
     def _browse_kf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Key File", "", "All files (*)"
