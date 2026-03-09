@@ -51,7 +51,7 @@ try:
 except ImportError:
     _PARAMIKO = False
 
-# Pre-compiled regex for all CSI escape sequences we handle at the widget level
+# Pre-compiled regex for all CSI escape sequences handled at the widget level
 _VT_RE = _re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
 
 
@@ -116,11 +116,32 @@ class SSHWorker(QObject):
                 "username": self._session.username,
                 "timeout": 15,
             }
+
             if self._session.key_path:
+                # Explicit key file — skip agent to prevent FIDO2 key crashes
                 kwargs["key_filename"] = self._session.key_path
+                kwargs["allow_agent"] = False
+                kwargs["look_for_keys"] = False
+            elif self._password:
+                # Password auth — skip agent for the same reason
+                kwargs["allow_agent"] = False
+                kwargs["look_for_keys"] = False
+
             if self._password:
                 kwargs["password"] = self._password
-            client.connect(**kwargs)
+
+            try:
+                client.connect(**kwargs)
+            except paramiko.ssh_exception.SSHException as _agent_err:
+                # Pure-agent sessions: retry without agent if a FIDO2/hardware
+                # key caused the "key cannot be used for signing" error
+                if "signing" in str(_agent_err).lower():
+                    kwargs["allow_agent"] = False
+                    kwargs["look_for_keys"] = False
+                    client.connect(**kwargs)
+                else:
+                    raise
+
             self._ssh = client
             transport = client.get_transport()
 
@@ -638,6 +659,7 @@ class SSHTerminalWidget(QWidget):
         if self._transport is None:
             return
         from app.sftp.browser import SFTPBrowserWidget
+        # Find parent tab widget and add the SFTP tab next to this one
         parent_tabs = self.parent()
         if hasattr(parent_tabs, "addTab"):
             sftp_widget = SFTPBrowserWidget(
@@ -716,6 +738,7 @@ class SSHTerminalWidget(QWidget):
         from app.managers.keepass import keepass_manager
         menu = QMenu(self)
 
+        # In-terminal SSH autofill (send to channel)
         if self._session.keepass_entry_uuid and keepass_manager.is_open:
             entry = keepass_manager.get_entry_by_uuid(self._session.keepass_entry_uuid)
             if entry:
@@ -729,6 +752,7 @@ class SSHTerminalWidget(QWidget):
                 )
                 menu.addSeparator()
 
+        # Global auto-type (pynput)
         menu.addAction("Global Auto-Type (pynput)…").triggered.connect(
             self._global_autotype
         )
@@ -821,7 +845,7 @@ class SSHTerminalWidget(QWidget):
 # ---------------------------------------------------------------------------
 
 class _TerminalEdit(QTextEdit):
-    """Read-only QTextEdit that captures key events and emits them as bytes."""
+    """QTextEdit that captures key events and emits them as bytes."""
 
     key_pressed = Signal(bytes)
 
