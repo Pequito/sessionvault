@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pathlib
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -66,7 +66,6 @@ class KeePassUnlockDialog(QDialog):
         self._pw_edit = QLineEdit()
         self._pw_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._pw_edit.setPlaceholderText("master password")
-        self._pw_edit.setFocus()
         form.addRow("Master Password", self._pw_edit)
 
         root.addLayout(form)
@@ -84,6 +83,14 @@ class KeePassUnlockDialog(QDialog):
 
         self._pw_edit.returnPressed.connect(self._unlock)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._pw_edit.setFocus)
+        if self.parent():
+            geo = self.frameGeometry()
+            geo.moveCenter(self.parent().geometry().center())
+            self.move(geo.topLeft())
+    
     def _browse_kf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Key File", "", "All files (*)"
