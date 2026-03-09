@@ -5,6 +5,86 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **YubiKey / OTP authentication** — SSH Connect dialog now has a **PIN + OTP** field;
+  the value is appended to the password before sending, matching the PAM `pam_yubico`
+  server-side expectation (`password + PIN + OTP`)
+
+### Fixed
+
+- **FIDO2 / hardware-key agent crash** — when the SSH agent contains `sk-ecdsa` or
+  `sk-ed25519` keys, `paramiko` previously raised `SSHException: key cannot be used for
+  signing` from the transport thread. Connections that supply a key file or password now
+  skip the agent entirely; pure-agent sessions fall back automatically on that error
+- **KeePass dialog focus** — password field now reliably receives focus the moment the
+  Unlock / Open dialog appears (deferred via `QTimer.singleShot` so focus fires after Qt
+  has finished painting the window)
+- **KeePass dialog placement** — both the Unlock and Open dialogs now centre themselves
+  on the main application window instead of appearing at the OS default position
+- **Terminal carriage-return handling** — `\r` (used by shell prompts, progress bars,
+  and `rsync` / `wget` output) now overwrites the current line rather than stacking new
+  lines; `\r\n` Windows line endings are normalised correctly
+- **Terminal VT100 sequences** — the following control sequences are now acted upon
+  rather than silently dropped:
+
+  | Sequence | Effect |
+  |----------|--------|
+  | `\x1b[2J` / `\x1b[J` | Clear screen (`clear` command) |
+  | `\x1b[K` | Erase to end of current line |
+  | `\x1b[H` / `\x1b[r;cH` | Absolute cursor position (ncurses apps) |
+  | `\x1b[nA/B/C/D` | Relative cursor movement up / down / right / left |
+
+- **Terminal blinking cursor** — the terminal widget no longer sets `setReadOnly(True)`;
+  Qt's native blinking text cursor is now visible. Key input is still fully intercepted
+  so the user cannot accidentally type into the widget buffer
+
+---
+
+## [2.1.0] – 2026-03-04
+
+### Added
+
+- **SSH Connect dialog** — per-session credential prompt shown on connect; supports
+  username override, manual password entry, and KeePass entry selection from a
+  searchable combo box
+- **KeePass multi-database panel** — sidebar tree view shows all open databases with
+  groups and entries; supports opening, locking, and re-unlocking individual databases
+  without closing others
+- **KeePass path persistence** — last-used database paths survive restarts and are shown
+  as locked entries in the panel on next launch; re-unlock with one click
+- **Desktop lock detection** — app responds to OS session-lock events and locks all open
+  KeePass databases automatically
+- **Sessions search bar** — filter the session tree in real time by typing in the search
+  field above the session list
+- **Browser extension integration** — credential auto-fill endpoint for compatible
+  browser extensions via a local WebSocket bridge
+- **Full documentation** — every module and public class now carries a docstring and
+  author attribution
+
+### Fixed
+
+- **KeePass unlock dialog** was not appearing on first launch in certain configurations
+- **KeePass panel content** shifted left after panel resize; layout now anchors correctly
+- **pykeepass `Group` attribute** — `parent_group` renamed to `parentgroup` to match the
+  installed library version; previously raised `AttributeError` when expanding groups
+- **`NameError` in KeePass tree build** — `_add_entry_item` closure was referenced
+  before assignment inside `_add_group`; call order corrected
+- **MobaXterm importer** — updated value-format parser to handle the new field layout in
+  recent MobaXterm exports; `SubRep` folder names are now parsed correctly
+- **MobaXterm import crash** — duplicate session names no longer raise an unhandled
+  exception during import
+
+### Changed
+
+- KeePass tree view polished: collapsible groups, locked-state icons, cleaner row
+  spacing, and an **Apply** button for pending edits
+- Activity log panel added for connection and KeePass events
+
+---
+
 ## [2.0.0] – 2026-02-27
 
 ### Added
