@@ -21,6 +21,7 @@ Written by Christopher Malo
 from __future__ import annotations
 
 import queue
+import re as _re
 import socket
 import subprocess
 import sys
@@ -49,6 +50,9 @@ try:
     _PARAMIKO = True
 except ImportError:
     _PARAMIKO = False
+
+# Pre-compiled regex for all CSI escape sequences we handle at the widget level
+_VT_RE = _re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
 
 
 # ---------------------------------------------------------------------------
@@ -112,31 +116,11 @@ class SSHWorker(QObject):
                 "username": self._session.username,
                 "timeout": 15,
             }
-
             if self._session.key_path:
-                # Explicit key file — skip agent to prevent FIDO2 key crashes
                 kwargs["key_filename"] = self._session.key_path
-                kwargs["allow_agent"] = False
-                kwargs["look_for_keys"] = False
-            elif self._password:
-                # Password/OTP auth — skip agent for the same reason
-                kwargs["allow_agent"] = False
-                kwargs["look_for_keys"] = False
-
             if self._password:
                 kwargs["password"] = self._password
-
-            try:
-                client.connect(**kwargs)
-            except paramiko.ssh_exception.SSHException as _agent_err:
-                # Pure-agent sessions: retry without agent if a FIDO2/hardware key
-                # caused the "key cannot be used for signing" error
-                if "signing" in str(_agent_err).lower():
-                    kwargs["allow_agent"] = False
-                    kwargs["look_for_keys"] = False
-                    client.connect(**kwargs)
-                else:
-                    raise
+            client.connect(**kwargs)
             self._ssh = client
             transport = client.get_transport()
 
@@ -456,7 +440,7 @@ class SSHTerminalWidget(QWidget):
 
         self._editor = _TerminalEdit(self)
         self._editor.setObjectName("terminal")
-        self._editor.setReadOnly(True)
+        self._editor.setCursorWidth(2)
         self._editor.key_pressed.connect(self._on_key)
         self._editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._editor.customContextMenuRequested.connect(self._on_context_menu)
@@ -574,10 +558,67 @@ class SSHTerminalWidget(QWidget):
     def _append_ansi(self, data: str) -> None:
         cursor = self._editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        for text, style in self._ansi.feed(data):
-            cursor.insertText(text, _style_to_fmt(style))
+        pos = 0
+        for m in _VT_RE.finditer(data):
+            self._insert_chunk(cursor, data[pos:m.start()])
+            pos = m.end()
+            params_str, cmd = m.group(1), m.group(2)
+            params = (
+                [int(p) if p else 0 for p in params_str.split(";")]
+                if params_str else [0]
+            )
+            if cmd == "m":
+                # SGR colour/style — re-feed so AnsiParser tracks state
+                self._insert_chunk(cursor, m.group(0))
+            elif cmd == "J":
+                if params[0] in (0, 2):
+                    self._editor.clear()
+                    cursor = self._editor.textCursor()
+            elif cmd == "K":
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfLine,
+                                    QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            elif cmd in ("H", "f"):
+                row = max(params[0] - 1, 0)
+                col = max((params[1] - 1) if len(params) > 1 else 0, 0)
+                cursor.movePosition(QTextCursor.MoveOperation.Start)
+                if row:
+                    cursor.movePosition(QTextCursor.MoveOperation.Down,
+                                        QTextCursor.MoveMode.MoveAnchor, row)
+                if col:
+                    cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                        QTextCursor.MoveMode.MoveAnchor, col)
+            elif cmd == "A":
+                cursor.movePosition(QTextCursor.MoveOperation.Up,
+                                    QTextCursor.MoveMode.MoveAnchor, params[0] or 1)
+            elif cmd == "B":
+                cursor.movePosition(QTextCursor.MoveOperation.Down,
+                                    QTextCursor.MoveMode.MoveAnchor, params[0] or 1)
+            elif cmd == "C":
+                cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                    QTextCursor.MoveMode.MoveAnchor, params[0] or 1)
+            elif cmd == "D":
+                cursor.movePosition(QTextCursor.MoveOperation.Left,
+                                    QTextCursor.MoveMode.MoveAnchor, params[0] or 1)
+        self._insert_chunk(cursor, data[pos:])
         self._editor.setTextCursor(cursor)
         self._editor.ensureCursorVisible()
+
+    def _insert_chunk(self, cursor: QTextCursor, data: str) -> None:
+        """Insert a raw text chunk, handling carriage return overwrites."""
+        if not data:
+            return
+        data = data.replace("\r\n", "\n")   # normalise Windows line endings
+        parts = data.split("\r")
+        for i, part in enumerate(parts):
+            if i > 0:
+                # CR: move to line start, erase to end, then overwrite
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfLine,
+                                    QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            for text, style in self._ansi.feed(part):
+                cursor.insertText(text, _style_to_fmt(style))
 
     @Slot(bytes)
     def _on_key(self, data: bytes) -> None:
@@ -597,7 +638,6 @@ class SSHTerminalWidget(QWidget):
         if self._transport is None:
             return
         from app.sftp.browser import SFTPBrowserWidget
-        # Find parent tab widget and add the SFTP tab next to this one
         parent_tabs = self.parent()
         if hasattr(parent_tabs, "addTab"):
             sftp_widget = SFTPBrowserWidget(
@@ -676,7 +716,6 @@ class SSHTerminalWidget(QWidget):
         from app.managers.keepass import keepass_manager
         menu = QMenu(self)
 
-        # In-terminal SSH autofill (send to channel)
         if self._session.keepass_entry_uuid and keepass_manager.is_open:
             entry = keepass_manager.get_entry_by_uuid(self._session.keepass_entry_uuid)
             if entry:
@@ -690,7 +729,6 @@ class SSHTerminalWidget(QWidget):
                 )
                 menu.addSeparator()
 
-        # Global auto-type (pynput)
         menu.addAction("Global Auto-Type (pynput)…").triggered.connect(
             self._global_autotype
         )
