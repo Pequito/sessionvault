@@ -101,6 +101,17 @@ class KeePassOpenDialog(QDialog):
 
         self._pw_edit.returnPressed.connect(self._open)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._db_edit.text().strip():
+            QTimer.singleShot(0, self._pw_edit.setFocus)
+        else:
+            QTimer.singleShot(0, self._db_edit.setFocus)
+        if self.parent():
+            geo = self.frameGeometry()
+            geo.moveCenter(self.parent().geometry().center())
+            self.move(geo.topLeft())
+
     # ------------------------------------------------------------------
     # Last-path persistence
     # ------------------------------------------------------------------
@@ -111,22 +122,10 @@ class KeePassOpenDialog(QDialog):
         if last_paths:
             self._db_edit.setText(last_paths[0])
             self._hint_lbl.setVisible(True)
-        def showEvent(self, event) -> None:
-            super().showEvent(event)
-            if self._db_edit.text().strip():
-                QTimer.singleShot(0, self._pw_edit.setFocus)
-            else:
-                QTimer.singleShot(0, self._db_edit.setFocus)
-            if self.parent():
-                geo = self.frameGeometry()
-                geo.moveCenter(self.parent().geometry().center())
-                self.move(geo.topLeft())
 
-    
     def _save_last_path(self, path: str) -> None:
         """Persist ``path`` as the most-recently-used database."""
         last_paths: list[str] = settings_manager.get("keepass_last_paths", [])
-        # Move to front, deduplicate, keep at most 5
         paths = [path] + [p for p in last_paths if p != path]
         settings_manager.set("keepass_last_paths", paths[:5])
 
