@@ -129,12 +129,18 @@ class KeePassManager:
         log.info("KeePass database opened: %s", path)
 
     def close_db(self, path: str) -> None:
-        """Close (lock) a single database; switches active to another if needed."""
+        """Close (lock) a single database; switches active to another if needed.
+
+        The path remains in ``known_paths`` so the UI can still show the
+        database as locked and allow the user to unlock it again without
+        having to browse for the file a second time.
+        """
         with self._lock:
             if path not in self._dbs:
                 return
             self._dbs.pop(path)
-            self._known_paths = [p for p in self._known_paths if p != path]
+            if path not in self._known_paths:
+                self._known_paths.append(path)
             if self._active_path == path:
                 self._active_path = next(iter(self._dbs), "")
         log.info("KeePass database closed: %s", path)
@@ -174,6 +180,8 @@ class KeePassManager:
         with self._lock:
             self._dbs[path] = db
             self._active_path = path
+            if path not in self._known_paths:
+                self._known_paths.append(path)
         log.info("KeePass database created: %s", path)
 
     def lock(self) -> None:
